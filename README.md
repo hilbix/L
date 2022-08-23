@@ -1,3 +1,7 @@
+> This is not ready yet
+
+[![L Build Status](https://api.cirrus-ci.com/github/hilbix/L.svg?branch=master)](https://cirrus-ci.com/github/hilbix/L/master)
+
 # L
 
 Embedded Language (hence the letter `L` pronounced `el` like Embedded Language)
