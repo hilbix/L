@@ -250,7 +250,7 @@ static void _Lbuf_free(Lbuf);
 static void _Lnum_free(Lnum);
 static void _Lrun_free(Lrun);
 static void _Lio_free(Lio);
-static void _Llist_free(Lio);
+static void _Llist_free(Llist);
 static void _Ltmp_free(Ltmp);
 
 static void (* const LFREE[])() =
@@ -954,6 +954,21 @@ Liter_getc(Liter _)
 /* Llist *************************************************************/
 /* Llist *************************************************************/
 
+static void
+_Llist_free(Llist list)
+{
+  L	_ = list->ptr._;
+  Lmem	mem;
+
+  while ((mem = list->first) != 0)
+    {
+      list->first	= mem->next;
+      L_mem_free(_, mem);
+      list->num--;
+    }
+  LFATAL(list->num);
+}
+
 static Llist
 Llist_push(Llist list, const void *ptr, size_t len)
 {
@@ -963,6 +978,7 @@ Llist_push(Llist list, const void *ptr, size_t len)
   mem		= Lmem_dup(_, ptr, len);
   mem->next	= list->first;
   list->first	= mem;
+  list->num++;
   return list;
 }
 
@@ -973,11 +989,12 @@ Llist_pop(Llist list, void *ptr, size_t len)
   Lmem	mem;
 
   mem		= list->first;
-  list->first	= mem;
+  list->first	= mem->next;
 
   LFATAL(!mem || mem->len != len);
   memcpy(ptr, mem->data, len);
   L_mem_free(_, mem);
+  list->num--;
   return list;
 }
 
@@ -1057,6 +1074,14 @@ Ltmp_proc_hex(Ltmp _, void *_ptr, int len)
 /* Lio ***************************************************************/
 /* Lio ***************************************************************/
 
+static void
+_Lio_free(Lio _)
+{
+  if (_->open)
+    close(_->fd);
+  _->fd	= -1;
+}
+
 static Lbuf
 Lio_get_buf(Lio io, size_t max)
 {
@@ -1107,6 +1132,14 @@ Lio_get_buf(Lio io, size_t max)
 
 /* Lrun **************************************************************/
 /* Lrun **************************************************************/
+
+static void
+_Lrun_free(Lrun _)
+{
+  L_free(_->ptr._, _->steps);
+  _->steps	= 0;
+  _->cnt	= 0;
+}
 
 static Lrun
 Lrun_add(Lrun _, Lfn fn, union Larg arg)
