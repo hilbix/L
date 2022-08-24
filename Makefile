@@ -11,8 +11,8 @@ INSTALL_PREFIX=/usr/local
 
 SRCS=$(wildcard *.c)
 BINS=$(SRCS:.c=)
-SETS=$(shell sed -n 's/^[	 /]*\*[*	 ]\*LIBS:[	 ]*//p' $(SRCS))
-CFLAGS=-Wall -O3 -g $(shell bash -xc 'pkg-config --cflags $(SETS)')
+SETS=$(shell sed -n 's/^[	 /]*\*[*	 ]*LIBS:[	 ]*//p' $(SRCS))
+CFLAGS=-Wall -O3 -g $(shell bash -xc 'pkg-config --cflags $(SETS)') $(shell sed -n 's/^[	 /]*\*[*	 ]*GCCFLAGS:[	 ]*//p' $(SRCS))
 LDLIBS=$(shell bash -xc 'pkg-config --libs $(SETS)')
 
 TMPDIR := .tmp
