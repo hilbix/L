@@ -1,4 +1,4 @@
-/*
+        /*
  * This is free software as in free beer, free speech and free baby.
  *
  * GCCFLAGS:	-Wno-unused-function
@@ -17,7 +17,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#if	1
+#if	0
 #define	DP(...)	do { L_stderr(NULL, "[[", __FILE__, ":", FORMAT_I(__LINE__), " ", __func__, "]", ##__VA_ARGS__, "]\n", NULL); } while (0)
 #else
 #define	DP	xDP
@@ -42,15 +42,44 @@ typedef struct Ltmp	*Ltmp;
 
 typedef struct Lstack	*Lstack;
 typedef	struct Lmem	*Lmem;
+typedef struct Lregistry *Lreg;
 typedef union Larg	Larg;
 
 typedef void (		*Lfn)(Lrun, Larg);
+typedef void (		*Lfun)(Lrun, Lbuf name);
 
 enum Lwarns
   {
     LW_UNDERRUN,
+    LW_OVERUSE,
+    LW_LARGESTACK,
+    LW_EXTREMESTACK,
     LW_MAX_
   };
+
+enum Lcount
+  {
+    LC_stack,
+    LC_alloc,
+    LC_use,
+    LC_overuse,
+    LC_step,
+    LC_collect,
+    LC_MAX_
+  };
+
+const char * const Lcounts[] =
+  {
+    "stack",
+    "alloc",
+    "use",
+    "overuse",
+    "step",
+    "collect",
+  };
+
+#define	LCOUNT(WHAT)	++_->counts[LC_##WHAT]
+#define	LCOUNT__(WHAT)	--_->counts[LC_##WHAT]
 
 struct L
   {
@@ -58,15 +87,21 @@ struct L
     Lstack		run, wait, end;
     Lstack		unused;
     Lval		use, free, overuse;
+    Lmem		tmp;
 
     Lio			read, write;
     Lio			*io;
     int			ios;
 
+    Lreg		registry;
+
+    unsigned long	counts[LC_MAX_];
+
     void		*user;
 
     unsigned char	warns[(LW_MAX_+7)/8];
     unsigned		allocated:1;
+    unsigned		statistics:1;
   };
 
 struct Lptr
@@ -126,12 +161,26 @@ struct Ltmp	/* mutable extensible data buffer	*/
     char		*buf;
   };
 
+struct Lregistry
+  {
+    const unsigned char	*part;
+    Lfun		fn;
+    Lreg		*sub;
+    unsigned char	min, max;
+  };
+
+struct Lregister
+  {
+    char	*name;
+    Lfun	fn;
+  };
+
 /* Value
  * value -> type
  */
 union Lval
   {
-    struct	Lptr	ptr;
+    struct	Lptr	ptr;	/* depends on type	*/
     struct	Lbuf	buf;	/* immutable	*/
     struct	Lnum	num;	/* immutable	*/
     struct	Lrun	run;	/* immutable	*/
@@ -179,7 +228,6 @@ struct Lmem
     size_t		len;
     char		data[0];
   };
-
 
 /* Formatting ********************************************************/
 /* Formatting ********************************************************/
@@ -280,7 +328,7 @@ static const int LSIZE[] =
 static Lstack Lstack_new(L);
 
 /* never call this yourself!	*/
-static void _Lptr_free(Lptr ptr) { LFATAL(ptr, "unsupported call to free()"); }
+static void _Lptr_free(Lptr ptr) { LFATAL(ptr, ": unsupported call to free()"); }
 static void _Lbuf_free(Lbuf);
 static void _Lnum_free(Lnum);
 static void _Lrun_free(Lrun);
@@ -348,7 +396,7 @@ FORMATX(struct Format *f, const unsigned char *ptr, size_t len)
 }
 
 static void
-FORMAT(struct Format *f, struct FormatArg *a)
+vFORMAT(struct Format *f, struct FormatArg *a)
 {
   const char	*s;
 
@@ -357,23 +405,23 @@ FORMAT(struct Format *f, struct FormatArg *a)
       switch ((unsigned long long)s)
         {
         unsigned	u;
-	Lval		v;
+        Lval		v;
 
-        case F_A:	FORMAT(f, va_arg(a->l, struct FormatArg *)); continue;
+        case F_A:	vFORMAT(f, va_arg(a->l, struct FormatArg *)); continue;
         case F_U:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%llu", va_arg(a->l, unsigned long long));	break;
         case F_I:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%lld", va_arg(a->l, long long));		break;
         case F_C:	s=f->buf; u = va_arg(a->l, unsigned); snprintf(f->buf, sizeof f->buf, "%c(%02x)", isprint(u) ? u : '?', u);			break;
         case F_V:	v=va_arg(a->l, Lval); s=v ? Ltypes[v->ptr.type] : "(null)";				break;
-	case F_X:
-	  {
-	    const void	*ptr;
-	    size_t	len;
+        case F_X:
+          {
+            const void	*ptr;
+            size_t	len;
 
-	    ptr	= va_arg(a->l, const void *);
-	    len	= va_arg(a->l, size_t);
-	    FORMATX(f, ptr, len);
-	    continue;
-	  }
+            ptr	= va_arg(a->l, const void *);
+            len	= va_arg(a->l, size_t);
+            FORMATX(f, ptr, len);
+            continue;
+          }
         }
       f->out(f, s, strlen(s));
     }
@@ -383,6 +431,16 @@ FORMAT(struct Format *f, struct FormatArg *a)
 #define	FORMAT_START(A,S)	do { va_start(A.l, S); } while (0)
 #define	FORMAT_END(A)		do { va_end(A.l); } while (0)
 
+static void
+FORMAT(struct Format *f, ...)
+{
+  FormatArg	a;
+
+  FORMAT_START(a, f);
+  vFORMAT(f, &a);
+  FORMAT_END(a);
+}
+
 static L
 L_stderr(L _, ...)
 {
@@ -391,7 +449,7 @@ L_stderr(L _, ...)
 
   FORMAT_INIT(f, writer, 2, _);
   FORMAT_START(a, _);
-  FORMAT(&f, &a);
+  vFORMAT(&f, &a);
   FORMAT_END(a);
   return _;
 }
@@ -474,6 +532,32 @@ L_free(L _, void *ptr)
   return _;
 }
 
+static L
+L_free_const(L _, const void *ptr_const)
+{
+  return L_free(_, (void *)ptr_const);
+}
+
+/* we return type (void *) to support
+ * char and unsigned char at the same time
+ */
+static void *
+Lstrdup_n(L _, const void *s, size_t len)
+{
+  char	*tmp;
+
+  tmp	= Lalloc(_, len+1);
+  tmp[len]	= 0;
+  memcpy(tmp, s, len);
+  return tmp;
+}
+
+static void *
+Lstrdup(L _, const void *s)
+{
+  return Lstrdup_n(_, s, strlen(s));
+}
+
 
 /* New+Free **********************************************************/
 /* New+Free **********************************************************/
@@ -486,6 +570,7 @@ Lval_new(L _, enum Ltype type)
   ptr	= Lalloc0(_, LSIZE[type]);
   ptr->ptr._	= _;
   ptr->ptr.use	= 1;
+  LCOUNT(use);
   ptr->ptr.type	= type;
   return ptr;
 }
@@ -573,7 +658,7 @@ Lmem_dup(L _, const void *ptr, size_t len)
 {
   struct Lmem	*mem;
 
-  mem		= Lalloc(_, len+sizeof *mem);
+  mem		= Lalloc(_, (len+1)+sizeof *mem);	/* +1 for Lmem_str() below	*/
   mem->next	= 0;
   mem->len	= len;
   memcpy(mem->data, ptr, len);
@@ -594,6 +679,29 @@ static L
 L_mem_free(L _, Lmem mem)
 {
   return L_free(_, mem);
+}
+
+static Lmem
+Lmem_tmp(L _, Lmem mem)
+{
+  LFATAL(mem->next);
+  mem->next	= _->tmp;
+  _->tmp	= mem;
+  return mem;
+}
+
+/* quick and dirty make C-String out of mem	*/
+static const char *
+Lmem_str(Lmem mem)
+{
+  mem->data[mem->len]	= 0;
+  return mem->data;
+}
+
+static const char *
+Lmem_tmp_str(L _, Lmem mem)
+{
+  return Lmem_str(Lmem_tmp(_, mem));
 }
 
 
@@ -640,32 +748,41 @@ Lptr_move(Lptr _, Lval *list)
  * This moves to overuse-list if count goes too high
  */
 static Lptr
-Lptr_inc(Lptr _)
+Lptr_inc(Lptr ptr)
 {
-  xDP(FORMAT_X(_), FORMAT_V(_));
-  if (_->overuse)
-    return _;
-  if (!_->use)
-    Lptr_move(_, &_->_->use);
-  if (++_->use)
-    return _;
-  _->use	= 1;
-  _->overuse	= 1;
-  return Lptr_move(_, &_->_->overuse);
+  L	_ = ptr->_;
+
+  xDP(FORMAT_X(ptr), FORMAT_V(ptr));
+  if (ptr->overuse)
+    return ptr;
+  if (!ptr->use)
+    Lptr_move(ptr, &_->use);
+
+  LCOUNT(use);
+  if (++ptr->use)
+    return ptr;
+
+  ptr->use	= 1;
+  ptr->overuse	= 1;
+  LCOUNT(overuse);
+  L_warn(_, LW_OVERUSE, FORMAT_V(ptr), " overused", NULL);
+  return Lptr_move(ptr, &_->overuse);
 }
 
 /* dec reference count
  * This moves it to freelist if count drops to 0
  */
 static Lptr
-Lptr_dec(Lptr _)
+Lptr_dec(Lptr ptr)
 {
-  if (_->overuse)
-    return _;
-  if (--_->use)
-    return _;
-  return Lptr_move(_, &_->_->free);	/* real free done in L_step()	*/
-  return 0;
+  L	_ = ptr->_;
+
+  if (ptr->overuse)
+    return ptr;
+  LCOUNT__(use);
+  if (--ptr->use)
+    return ptr;
+  return Lptr_move(ptr, &_->free);	/* real free done in L_step()	*/
 }
 
 static Lbuf Lbuf_dec(Lbuf _) { Lptr_dec(&_->ptr); return _; }
@@ -699,7 +816,14 @@ Lstack_new(L _)
   if (s)
     _->unused	= s->next;
   else
-    s	= Lalloc(_, sizeof *s);
+    {
+      s	= Lalloc(_, sizeof *s);
+      switch (LCOUNT(stack))
+        {
+        case 100000:	L_warn(_, LW_LARGESTACK, "large stack", NULL);			break;
+        case 10000000:	L_warn(_, LW_EXTREMESTACK, "extremly large stack", NULL);	break;
+        }
+    }
   s->next	= 0;
   s->arg.val	= 0;
   return s;
@@ -834,7 +958,7 @@ Lptr_push(Lptr _, Lstack *stack)
 /* adds (appends) the memory buffer to buf
  */
 static Lmem
-Lbuf_mem_put(Lbuf _, Lmem mem)
+Lmem_add_to_buf(Lbuf _, Lmem mem)
 {
   LFATAL(!mem || mem->next);
   if (!_->last)
@@ -886,9 +1010,8 @@ _Lbuf_free(Lbuf buf)
 static Lmem
 Lbuf_mem_new(Lbuf _, size_t len)
 {
-  return Lbuf_mem_put(_, Lmem_new(_->ptr._, len));
+  return Lmem_add_to_buf(_, Lmem_new(_->ptr._, len));
 }
-
 
 static Lbuf
 Lbuf_add_ptr(Lbuf _, const void *ptr, size_t len)
@@ -898,12 +1021,18 @@ Lbuf_add_ptr(Lbuf _, const void *ptr, size_t len)
 }
 
 static Lbuf
-Lbuf_add_buf(Lbuf _, Lbuf buf)
+Lbuf_add_str(Lbuf _, const void *s)
+{
+  return Lbuf_add_ptr(_, s, strlen(s));
+}
+
+static Lmem
+Lmem_from_buf(Lbuf buf)
 {
   Lmem		mem, m;
   size_t	offset;
 
-  mem	= Lbuf_mem_new(_, buf->total);
+  mem	= Lmem_new(buf->ptr._, buf->total);
   offset= 0;
   for (m=buf->first; m; m=m->next)
     {
@@ -911,13 +1040,21 @@ Lbuf_add_buf(Lbuf _, Lbuf buf)
       offset	+= m->len;
     }
   LFATAL(offset != buf->total);
-  return _;
+  return mem;
+}
+
+static Lbuf
+Lbuf_add_buf(Lbuf buf, Lbuf add)
+{
+//  mem	= Lbuf_mem_new(buf, add->total);
+  Lmem_add_to_buf(buf, Lmem_from_buf(add));
+  return buf;
 }
 
 static Lbuf
 Lbuf_move_mem(Lbuf _, Lbuf src)
 {
-  Lbuf_mem_put(_, Lbuf_mem_get(src));
+  Lmem_add_to_buf(_, Lbuf_mem_get(src));
   return _;
 }
 
@@ -967,25 +1104,11 @@ Lbuf_add_format(Lbuf _, ...)
   FormatArg	a;
   Format	f;
 
-  FORMAT_INIT(f, Lbuf_writer, 2, _);
+  FORMAT_INIT(f, Lbuf_writer, 0, _);
   FORMAT_START(a, _);
-  FORMAT(&f, &a);
+  vFORMAT(&f, &a);
   FORMAT_END(a);
   return _;
-}
-
-/* toString(value)     */
-static Lbuf
-Lbuf_from_val(Lval v)
-{
-  L    _ = v->ptr._;
-
-  switch (v->ptr.type)
-    {
-    case LNUM: return Lbuf_add_format(Lbuf_dec(Lbuf_new(_)), FORMAT_I(v->num.num), NULL);
-    case LBUF: return &v->buf;
-    }
-  return 0;
 }
 
 static Lbuf
@@ -1011,14 +1134,15 @@ typedef struct Liter
     int		pos;
   } *Liter;
 
-static Lbuf
+static Liter
 Lbuf_iter(Lbuf _, Liter l)
 {
+  LFATAL(!l || _->ptr.type != LBUF);
   l->buf	= _;
   l->mem	= _->first;
   l->cnt	= _->total;
   l->pos	= 0;
-  return _;
+  return l;
 }
 
 static int
@@ -1038,8 +1162,359 @@ Liter_getc(Liter _)
       _->pos	= 0;
     }
   _->cnt--;
-  return c; 
+  return c;
 }
+
+static void *
+Liter_read(Liter _, void *_ptr, size_t len)
+{
+  Lmem		mem;
+  size_t	offset;
+  char		*ptr = _ptr;
+
+  LFATAL(len > _->cnt);
+  offset	= 0;
+  while (len)
+    {
+      size_t	max;
+
+      mem	= _->mem;
+      max	= mem->len;
+      if (max>len)
+        max	= len;
+      memcpy(ptr+offset, mem->data+_->pos, max);
+      if ((_->pos+=max) >= mem->len)
+        {
+          _->mem	= mem->next;
+          _->pos	= 0;
+        }
+      _->cnt	-= max;
+      len	-= max;
+    }
+  return _ptr;
+}
+
+/* create an allocated string from the rest of the iter
+ */
+static void *
+Liter_strdup(Liter _)
+{
+  char		*tmp;
+  size_t	len;
+
+  len	= _->cnt;
+
+  tmp		= Lalloc(_->buf->ptr._, len+1);
+  tmp[len]	= 0;
+  return Liter_read(_, tmp, len);
+}
+
+
+/* toString **********************************************************/
+/* toString **********************************************************/
+/* For efficiency reasons we are a bit redundant here	*/
+
+static Lbuf
+Lbuf_from_val_dec(Lval v)
+{
+  L    _ = v->ptr._;
+
+  switch (v->ptr.type)
+    {
+    case LNUM: return Lbuf_add_format(Lbuf_dec(Lbuf_new(_)), FORMAT_I(v->num.num), NULL);
+    case LBUF: return &v->buf;
+    }
+  return 0;
+}
+
+static Lmem
+Lmem_from_val(Lval v)
+{
+  Lbuf	buf;
+  Lmem	mem;
+
+  buf	= Lbuf_from_val_dec(v);
+  if (buf == &v->buf || buf->ptr.use || buf->first->next || buf->total != buf->first->len)
+    return Lmem_from_buf(buf);
+
+  /* Optimize a bit here:
+   * Free the unused buffer code
+   * and just return it's mem without memory duplication
+   * (zero copy)
+   */
+ mem	= Lbuf_mem_get(buf);
+ L_ptr_free(&buf->ptr);
+ return mem;
+}
+
+
+/* Registry **********************************************************/
+/* Registry **********************************************************/
+/* Registry **********************************************************/
+
+static void
+_Lreg_free(L _, Lreg reg)
+{
+  Lreg	regs[100];
+
+  /* this is like a recursion, but a bit more iterative	*/
+  regs[0]	= reg;
+  for (int pos=0; pos>=0; )
+    {
+      Lreg	reg;
+
+      /* top done?  Then prceed to the previous one	*/
+      if ((reg = regs[pos]) == 0)
+        {
+          pos--;
+          continue;
+        }
+      /* renumber sub-paths to start at 0
+       * so ->max points to the uppermost sub-path directly
+       */
+      if (reg->min)
+        {
+          /* note that ->min usually is above 0, as C-strings do not contain NULs
+           * But we do not count on this for stability reasons
+           */
+          LFATAL(reg->max < reg->min);
+          reg->max	-= reg->min;
+          reg->min	= 0;
+        }
+      /* the uppermost sub-path of the top (if exists) becomes the new top
+       */
+      if (reg->sub)
+        {
+          Lreg	sub;
+
+          while ((sub=reg->sub[reg->max]) == 0 && reg->max)	/* we must not decrement ->max when it is 0	*/
+            reg->max--;						/* we hit an empty sub	*/
+          if (sub)
+            {
+              LFATAL(pos >= (sizeof regs/sizeof *regs)-1);	/* this should not happen.  If so we need something like a recursion here	*/
+              regs[++pos]		= sub;			/* set the new top	*/
+              reg->sub[reg->max]	= 0;			/* reduce the current top by its uppermost sub-path	*/
+
+              if (reg->max--)
+                continue;
+              reg->max			= 0;			/* not needed, but does no harm	*/
+
+              /* Small optimization:  When we became a leaf, free us early	*/
+              regs[pos-1]		= sub;			/* needed	*/
+              regs[pos]			= reg;			/* not needed, but does no harm	*/
+            }
+        }
+      /* apparently the top has no sub-path anymore, so it is (reduced to) a leaf.
+       * We can free it
+       */
+      if (reg->sub)
+        {
+          L_free(_, reg->sub);
+          reg->sub	= 0;
+        }
+      if (reg->part)
+        {
+          L_free_const(_, reg->part);
+          reg->part	= 0;
+        }
+      L_free(_, reg);
+      regs[pos]	= 0;	/* decrement skipped, it will be done in the next loop anyway	*/
+    }
+}
+
+/* Throw away the registry	*/
+static L
+Lreg_reset(L _)
+{
+  Lreg	reg;
+
+  reg		= _->registry;
+  _->registry	= 0;
+
+  _Lreg_free(_, reg);
+  return _;
+}
+
+/* XXX TODO XXX This routine is too long
+ */
+static Lreg
+Lreg_find(L _, Liter name, int create)
+{
+  Lreg		*last;
+  int		c;
+  int		pos;
+
+  last	= &_->registry;
+  pos	= 0;
+  for (;;)
+    {
+      Lreg			reg, add;
+      const unsigned char	*part, *tmp;
+      unsigned char		cc, lo, hi;
+
+      reg	= *last;
+      if (!reg)
+        {
+          /* we hit a nonexisting leaf	*/
+          if (create)
+            {
+              /* create new leaf	*/
+              reg	= Lalloc0(_, sizeof *reg);
+              reg->part	= Liter_strdup(name);
+            }
+          return reg;
+        }
+
+      /* get the next character	*/
+      c		= Liter_getc(name);
+      LFATAL(!c);	/* must not happen	*/
+
+      part	= reg->part;
+      cc	= part[pos];
+
+      /* found the match, continue	*/
+      if (cc == c)
+        {
+          /* cc != 0	*/
+          pos++;
+          continue;
+        }
+
+      /* are we at the end of the name?	*/
+      if (c<0)
+        {
+          if (!cc)
+            return reg;		/* we hit the exact node	*/
+          if (!create)
+            return 0;
+
+          /* we are in the middle of a node.
+           * Split it
+           */
+          add		= Lalloc0(_, sizeof *add);
+          add->part	= Lstrdup_n(_, part, pos);	/* can be empty string	*/
+          add->sub	= Lalloc0(_, sizeof *add->sub);
+          add->min	= cc;
+          add->max	= cc;
+          add->sub[0]	= reg;
+
+          tmp		= Lstrdup(_, part+pos+1);
+          L_free_const(_, part);
+
+          reg->part	= tmp;
+          *last		= add;
+
+          pos		= 0;
+          return add;
+        }
+
+      /* are we at the end of the node?  Enter ->sub	*/
+      if (!cc)
+        {
+          /* c > 0	*/
+          Lreg	*tmp, *ext;
+
+          lo	= reg->min;
+          hi	= reg->max;
+          /* are we outside of the ->sub table?	*/
+          if (c>hi)
+            {
+              /* c > 0.  At init ->min == 0 and ->max == 0, so we always go here	*/
+              hi	= c;
+              if (!lo)
+                lo	= c;
+            }
+          else if (c<lo)
+            {
+               /* hi >= c > 0.  So lo never goes to 0 here
+               */
+              lo	= c;
+            }
+          else
+            {
+              /* we are inside with an existing slot within sub-node range ->min <= c <= ->max	*/
+              last	= &reg->sub[c-lo];
+              continue;
+            }
+          if (!create)
+            return 0;
+
+          /* add node as we are in create mode	*/
+          ext		= Lalloc0(_, (1+hi-lo)*sizeof *ext);
+
+          tmp		= reg->sub;
+          memcpy(&ext[reg->min-lo], tmp, (1+reg->max-reg->min)*sizeof *ext);
+
+          reg->min	= lo;
+          reg->max	= hi;
+          reg->sub	= ext;
+
+          L_free(_, tmp);
+
+          last		= &reg->sub[c];
+          pos		= 0;
+          continue;
+        }
+
+      /* 0 < cc <> c > 0	*/
+
+      /* we are in the middle of the node
+       * split it
+       */
+      if (!create)
+        return 0;
+
+      lo		= cc;
+      hi		= cc;
+      if (c < lo)
+        lo		= c;
+      else
+        hi		= c;
+
+      add		= Lalloc0(_, sizeof *add);
+      add->part		= Lstrdup_n(_, part, pos);	/* can be empty string	*/
+      add->sub		= Lalloc0(_, (1+hi-lo)*sizeof *add->sub);
+      add->min		= lo;
+      add->max		= hi;
+      add->sub[cc-lo]	= reg;
+      /* add->sub[c] == NULL	*/
+
+      tmp		= Lstrdup(_, part+pos+1);	/* part[pos] == cc > 0	*/
+
+      *last		= add;
+      reg->part		= tmp;
+
+      L_free_const(_, part);
+
+      last		= &add->sub[c-lo];
+      pos		= 0;
+    }
+}
+
+static L
+L_register(L _, const char *name, Lfun fn)
+{
+  Lreg		reg;
+  struct Liter	iter;
+
+  reg	= Lreg_find(_, Lbuf_iter(Lbuf_add_str(Lbuf_dec(Lbuf_new(_)), name), &iter), 1);
+
+  LFATAL(!reg || !reg->part);	/* ->part can be the empty string but must not be NULL!	*/
+  LFATAL(reg->fn, ": function ", name, " already registered", NULL);
+
+  reg->fn	= fn;
+  return _;
+}
+
+static L
+L_register_all(L _, const struct Lregister *ptr)
+{
+  for (; ptr->name; ptr++)
+    L_register(_, ptr->name, ptr->fn);
+  return _;
+}
+
+
 
 /* Llist *************************************************************/
 /* Llist *************************************************************/
@@ -1137,7 +1612,7 @@ unhex(char c)
 static int
 Ltmp_proc_hex(Ltmp _, void *_ptr, int len)
 {
-  LFATAL(_->pos & 1, "hex strings must come in HEX pairs");
+  LFATAL(_->pos & 1, ": hex strings must come in HEX pairs");
   if (_ptr)
     {
       char		*i = _->buf;
@@ -1153,7 +1628,7 @@ Ltmp_proc_hex(Ltmp _, void *_ptr, int len)
           c1	= *i++;
           c2	= *i++;
           x	= (unhex(c1)<<4) | unhex(c2);
-          LFATAL(x<0, "non-hex digit in [HEX] constant: ", FORMAT_C(c1), FORMAT_C(c2));
+          LFATAL(x<0, ": non-hex digit in [HEX] constant: ", FORMAT_C(c1), FORMAT_C(c2));
           *o++	= x;
         }
     }
@@ -1194,11 +1669,11 @@ Lio_get_buf(Lio io, size_t max)
           return buf;	/* input buffer's first mem fits query, so return it	*/
         }
     }
- 
+
   L	_ = io->ptr._;
   Lmem	mem;
   int	tmp;
- 
+
   /* input buffer is not directly suitable,
    * so copy portion into new output buffer
    */
@@ -1468,7 +1943,7 @@ Li(Lrun run, Larg a)
       DP("read", FORMAT_I(max));
       if (!Lbuf_add_readn(input->buf, input->fd, max<BUFSIZ ? BUFSIZ : max))
         {
-	  DP("EOF");
+          DP("EOF");
           /* kick buffer on EOF	*/
           Lptr_dec(&input->buf->ptr);
           input->buf	= 0;
@@ -1492,11 +1967,11 @@ Li(Lrun run, Larg a)
 }
 
 static Lbuf
-Lrun_buf_from_val(Lrun run, Lval v)
+Lrun_buf_from_val_dec(Lrun run, Lval v)
 {
   Lbuf	buf;
 
-  buf	= Lbuf_from_val(v);
+  buf	= Lbuf_from_val_dec(v);
   if (!buf)
     Lunknown(run, FORMAT_V(v), " has no ASCII representation", NULL);
   return buf;
@@ -1517,7 +1992,7 @@ Lo(Lrun run, Larg a)
   if (out->eof)
     return;
 
-  buf	= Lrun_buf_from_val(run, Lpop_dec(_));
+  buf	= Lrun_buf_from_val_dec(run, Lpop_dec(_));
   if (!buf)
     return;
 
@@ -1540,7 +2015,33 @@ Lo(Lrun run, Larg a)
 static void
 Lfunc(Lrun run, Larg a)
 {
-  LFATAL(1, "$ not yet implemented");
+  L		_ = run->ptr._;
+  struct Liter	i;
+  Lval		v;
+  Lreg		reg;
+  int		pos;
+  int		c;
+
+  v	= Lpop_dec(_);
+  if (!v)
+    return;
+  Lbuf_iter(&v->buf, &i);
+
+
+  reg	= _->registry;
+  pos	= 0;
+  while (reg && (c = Liter_getc(&i))>0)	/* not >=0!	*/
+    if (reg->part[pos] == c)
+      pos++;
+    else if (reg->sub && c>=reg->min && c<=reg->max)
+      {
+        reg	= reg->sub[c-reg->min];
+        pos	= 0;
+      }
+    else
+      reg	= 0;
+  LFATAL(!reg, ": $ function unknown: ", Lmem_tmp_str(_, Lmem_from_val(v)), NULL);
+
 }
 
 static int
@@ -1601,9 +2102,9 @@ Lcmp(Lrun run, Larg a)
 
   if (a1.ptr->type != a2.ptr->type)
     {
-      a1.buf	= Lrun_buf_from_val(run, a1.val);
+      a1.buf	= Lrun_buf_from_val_dec(run, a1.val);
       if (!a1.buf) return;
-      a2.buf	= Lrun_buf_from_val(run, a2.val);
+      a2.buf	= Lrun_buf_from_val_dec(run, a2.val);
       if (!a2.buf) return;
     }
   switch (a1.ptr->type)
@@ -1694,9 +2195,6 @@ static void ___here___(void) { 000; }	/* Add mode Lfn here	*/
 
 
 
-
-
-
 /* XXX TODO XXX wrong implementation *********************************/
 /* XXX TODO XXX wrong implementation *********************************/
 /* XXX TODO XXX wrong implementation *********************************/
@@ -1732,6 +2230,51 @@ L_load(L _, const char *s)
   Lptr_dec(&buf->ptr);
   return _;
 }
+
+
+/* $functions ********************************************************/
+/* $functions ********************************************************/
+/* $functions ********************************************************/
+
+
+static void
+Lstat_format(L _, Format *f)
+{
+  char	*sep;
+
+  sep	= "";
+  for (int i=0; i<sizeof Lcounts/sizeof *Lcounts; i++)
+    {
+      FORMAT(f, sep, Lcounts[i], "=", FORMAT_I(_->counts[i]), NULL);
+      sep	= " ";
+    }
+}
+
+static void
+Lstat(Lrun run, Lbuf name)
+{
+  Format	f;
+
+  L	_ = run->ptr._;
+  Larg	a;
+
+  a.buf	= Lbuf_new(_);
+  Lpush_dec(a.val);
+
+  FORMAT_INIT(f, Lbuf_writer, 0, a.buf);
+  Lstat_format(_, &f);
+}
+
+static void
+Lstats(Lrun run, Lbuf name)
+{
+  Format	f;
+
+  L	_ = run->ptr._;
+  FORMAT_INIT(f, writer, 2, _);
+  Lstat_format(_, &f);
+}
+
 
 
 /* PARSING ***********************************************************/
@@ -1787,7 +2330,7 @@ L_parse(L _, Lbuf buf)
   Lrun		run;
   int		c;
   Ltmp		tmp;
-  int		match, start;
+  int		match;
   Llist		list;
   size_t	pos;
   struct data
@@ -1801,7 +2344,6 @@ L_parse(L _, Lbuf buf)
   list	= Llist_new(_);
   pos	= 0;
   run	= Lrun_new(_);
-  start	= 0;
   match	= 0;
   for (Lbuf_iter(buf, &iter); (c = Liter_getc(&iter))>=0; )
     {
@@ -1810,9 +2352,9 @@ L_parse(L _, Lbuf buf)
 
       a.l	= -1;
       pos++;
-      if (start)
+      if (match)
         {
-          if (match && (match>0 ? match!=c : (c>='0' && c<='9')))
+          if (match>0 ? match!=c : (c>='0' && c<='9'))
             {
               xDP(".", FORMAT_C(c));
               Ltmp_add_c(tmp, c);
@@ -1820,12 +2362,12 @@ L_parse(L _, Lbuf buf)
             }
           switch (match)
             {
-            default:	LFATAL(1, "internal error, unknown match: ", FORMAT_C(match), NULL);
-	    case -1:
-	      Ltmp_add_c(tmp, 0);
+            default:	LFATAL(1, ": internal error, unknown match: ", FORMAT_C(match), NULL);
+            case -1:
+              Ltmp_add_c(tmp, 0);
               a.num		= Lnum_new(_);
-	      a.num->num	= strtoll(tmp->buf, NULL, 10);
-	      break;
+              a.num->num	= strtoll(tmp->buf, NULL, 10);
+              break;
             case '"':
             case '\'':
               a.buf	= Lbuf_add_tmp(Lbuf_new(_), tmp, Ltmp_proc_copy);
@@ -1834,32 +2376,35 @@ L_parse(L _, Lbuf buf)
               a.buf	= Lbuf_add_tmp(Lbuf_new(_), tmp, Ltmp_proc_hex);
               break;
             }
-	  tmp->pos	= 0;
+          tmp->pos	= 0;
           Lrun_add(run, Lpush_arg_inc, a);
-	  start	= 0;
-	  if (match>0)
-	    continue;
+
+          if (match>0)
+            {
+              match	= 0;
+              continue;
+            }
+          match	= 0;
         }
       DP("+", FORMAT_C(c));
       if (c>='a' && c<='z')		{ f = Lpop_into_reg;	a.i = c-'a'; }
       else if (c>='A' && c<='Z')	{ f = Lpush_reg;	a.i = c-'A'; }
       else if (c>='0' && c<='9')
         {
-          start	= 1;
           match	= -1;
-	  Ltmp_add_c(tmp, c);
+          Ltmp_add_c(tmp, c);
           continue;
         }
       else
         switch (c)	/* do not use other than a.i in this switch!	*/
           {
           default:
-	    if (!isspace(c)) Loops(_, "unknown input ", FORMAT_C(c));
+            if (!isspace(c)) Loops(_, "unknown input ", FORMAT_C(c));
           case '_':
-	    continue;
-          case '"':	start=1; match='"'; continue;
-          case '\'':	start=1; match='\''; continue;
-          case '[':	start=1; match=']'; continue;
+            continue;
+          case '"':	match='"';	continue;
+          case '\'':	match='\'';	continue;
+          case '[':	match=']';	continue;
           case '+':	f = Ladd;	break;
           case '-':	f = Lsub;	break;
           case '.':	f = Lmul;	break;
@@ -1916,13 +2461,17 @@ L_step(L _)
 {
   Lstack	*last, stack;
 
+  LCOUNT(step);
+
   /* Cleanup freed structures	*/
   while (_->free)
     {
+      LCOUNT(collect);
+
       DP("free", FORMAT_X(_->free));
       L_ptr_free(&_->free->ptr);
     }
-  
+
   last	= &_->run;
   while ((stack = *last)!=0)
     {
@@ -1932,7 +2481,7 @@ L_step(L _)
       run	= stack->arg.run;
       if (run->pos >= run->cnt)
         {
-	  /* program has reached it's end	*/
+          /* program has reached it's end	*/
           *last		= stack->next;
           stack->next	= _->end;
           _->end	= stack;
@@ -1955,6 +2504,14 @@ L_loop(L _)
   return _;
 }
 
+#define	LR(X)	{ #X, L##X }
+
+struct Lregister Lfuncs[] =
+  {
+    LR(stat), LR(stats),
+    {0}
+  };
+
 int
 main(int argc, char **argv)
 {
@@ -1962,6 +2519,7 @@ main(int argc, char **argv)
 
   DP();
   _	= L_init(NULL, NULL);
+  L_register_all(_, Lfuncs);
   L_load(_, argv[1]);
   L_loop(_);
   DP(" end");
