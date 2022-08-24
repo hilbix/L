@@ -1,5 +1,7 @@
 /*
  * This is free software as in free beer, free speech and free baby.
+ *
+ * GCCFLAGS:	-Wno-unused-function
  */
 
 #include <stdio.h>
@@ -34,7 +36,7 @@ typedef struct Lstack	*Lstack;
 typedef	struct Lmem	*Lmem;
 typedef union Larg	Larg;
 
-typedef void (		*Lfn)(L, Larg);
+typedef void (		*Lfn)(Lrun, Larg);
 
 struct L
   {
@@ -97,7 +99,7 @@ struct Lio	/* global	*/
 struct Llist	/* mutable buffer	*/
   {
     struct Lptr		ptr;
-    Lmem		first, last;
+    Lmem		first;
     int			num;
   };
 
@@ -163,9 +165,47 @@ struct Lmem
   };
 
 
+/* Formatting ********************************************************/
+/* Formatting ********************************************************/
+/* Formatting ********************************************************/
+
+typedef struct FormatArg
+  {
+    const char	*s;
+    va_list	l;
+  } FormatArg;
+
+typedef struct Format
+  {
+    void	(*out)(struct Format *, const void *, size_t len);
+    int		fd;
+    void	*user;
+    char	buf[256];
+  } Format;
+
+enum
+  {
+    F_NULL,
+    F_A,
+    F_U,
+    F_I,
+    F_C,
+    F_V,
+  };
+
+
 /* Auxiliary *********************************************************/
 /* Auxiliary *********************************************************/
 /* Auxiliary *********************************************************/
+
+#define	FORMAT_A(A)	(char *)F_A, &(A)
+#define	FORMAT_U(U)	(char *)F_U, (unsigned long long)(U)
+#define	FORMAT_I(I)	(char *)F_I, (long long)(I)
+#define	FORMAT_C(C)	(char *)F_C, (unsigned)(C)
+#define	FORMAT_V(V)	(char *)F_V, V
+
+static void Loops(L, const char *, ...);
+#define	LFATAL(X,...)	do { if (X) Loops(NULL, "FATAL ERROR: ", __FILE__, " ", FORMAT_I(__LINE__), " ", __func__, ": ", #X, ##__VA_ARGS__, NULL); } while (0)
 
 enum Ltype
   {
@@ -205,7 +245,7 @@ static const int LSIZE[] =
 static Lstack Lstack_new(L);
 
 /* never call this yourself!	*/
-static void _Lptr_free(Lptr);
+static void _Lptr_free(Lptr ptr) { LFATAL(ptr, "unsupported call to free()"); }
 static void _Lbuf_free(Lbuf);
 static void _Lnum_free(Lnum);
 static void _Lrun_free(Lrun);
@@ -223,43 +263,6 @@ static void (* const LFREE[])() =
     _Llist_free,
     _Ltmp_free,
   };
-
-#define	LFATAL(X,...)	do { if (X) Loops(NULL, "FATAL ERROR: ", __FILE__, " ", FORMAT_I(__LINE__), " ", __func__, ": ", #X, ##__VA_ARGS__, NULL); } while (0)
-
-
-/* Formatting ********************************************************/
-/* Formatting ********************************************************/
-/* Formatting ********************************************************/
-
-typedef struct FormatArg
-  {
-    const char	*s;
-    va_list	l;
-  } FormatArg;
-
-typedef struct Format
-  {
-    void	(*out)(struct Format *, const void *, size_t len);
-    int		fd;
-    void	*user;
-    char	buf[256];
-  } Format;
-
-enum
-  {
-    F_NULL,
-    F_A,
-    F_U,
-    F_I,
-    F_C,
-    F_V,
-  };
-
-#define	FORMAT_A(A)	(char *)F_A, &(A)
-#define	FORMAT_U(U)	(char *)F_U, (unsigned long long)(U)
-#define	FORMAT_I(I)	(char *)F_I, (long long)(I)
-#define	FORMAT_C(C)	(char *)F_C, (unsigned)(C)
-#define	FORMAT_V(V)	(char *)F_V, V
 
 static int
 write_all(int fd, const void *s, size_t len)
@@ -294,7 +297,7 @@ FORMAT(struct Format *f, struct FormatArg *v)
     {
       switch ((unsigned long long)s)
         {
-	unsigned u;
+        unsigned u;
 
         case F_A:	FORMAT(f, va_arg(v->l, struct FormatArg *)); continue;
         case F_U:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%llu", va_arg(v->l, unsigned long long));	break;
@@ -339,12 +342,12 @@ Loops(L _, const char *s, ...)
 }
 
 static void
-Lunknown(L _, const char *s, ...)
+Lunknown(Lrun run, const char *s, ...)
 {
   struct FormatArg	a;
 
   FORMAT_START(a, s);
-  L_stderr(_, "unknown operation: ", FORMAT_A(a), NULL);
+  L_stderr(run->ptr._, "unknown operation: ", FORMAT_A(a), NULL);
   FORMAT_END(a);
 }
 
@@ -411,10 +414,12 @@ static Lio	Lio_new(L _)	{ return &Lval_new(_, LIO  )->io;   }
 static Llist	Llist_new(L _)	{ return &Lval_new(_, LLIST)->list; }
 static Ltmp	Ltmp_new(L _)	{ return &Lval_new(_, LTMP )->tmp;  }
 
-static L L_ptr_free(Lptr _) { return _->_; }
-static L L_num_free(Lnum _) { return _->ptr._; }
-static L L_run_free(Lrun _) { return _->ptr._; }
-static L L_io_free (Lio  _) { return _->ptr._; }
+static void _Lnum_free(Lnum _) { }
+
+#if 0
+static void _Lrun_free(Lrun _) { }
+static void _Lio_free (Lio  _) { }
+#endif
 
 
 /* Setup *************************************************************/
@@ -481,6 +486,18 @@ static Lnum Lnum_set_size(Lnum _, size_t len)		{ return Lnum_set_ull(_, (unsigne
 /* Lmem **************************************************************/
 
 static Lmem
+Lmem_dup(L _, const void *ptr, size_t len)
+{
+  struct Lmem	*mem;
+
+  mem		= Lalloc(_, len+sizeof *mem);
+  mem->next	= 0;
+  mem->len	= len;
+  memcpy(mem->data, ptr, len);
+  return mem;
+}
+
+static Lmem
 Lmem_new(L _, size_t len)
 {
   struct Lmem	*mem;
@@ -499,6 +516,22 @@ L_mem_free(L _, Lmem mem)
 
 /* Lval Lptr inc/dec *************************************************/
 /* Lval Lptr inc/dec *************************************************/
+
+/* Never call this yourself if you are unsure
+ * Leave that to _dec() and _inc()
+ */
+static L
+L_ptr_free(Lptr ptr)
+{
+  L	_ = ptr->_;
+
+  *ptr->prev	= ptr->next;
+  if (ptr->next)
+    ptr->next->ptr.prev	= ptr->prev;
+  LFREE[ptr->type](_);
+  L_free(_, ptr);
+  return _;
+}
 
 static Lptr
 Lptr_move(Lptr _, Lval *list)
@@ -547,7 +580,7 @@ Lptr_dec(Lptr _)
     return _;
   if (--_->use)
     return _;
-  return Lptr_move(_, &_->_->free);	/* later does the: LFREE[_->type](_);	*/
+  return Lptr_move(_, &_->_->free);	/* real free done in L_step()	*/
   return 0;
 }
 
@@ -686,6 +719,7 @@ Lpop_dec(L _)
   return Lval_pop_dec(_, 0);
 }
 
+#if 0
 static void
 Lpush_arg_inc(L _, Larg a)
 {
@@ -698,7 +732,6 @@ Lpush_arg_dec(L _, Larg a)
   Lpush_dec(a.val);
 }
 
-#if 0
 static Lptr
 Lptr_push(Lptr _, Lstack *stack)
 {
@@ -756,7 +789,7 @@ _Lbuf_free(Lbuf buf)
   L	_ = buf->ptr._;
 
   while (buf->first)
-    L_free(_, Lbuf_mem_get(buf));
+    L_mem_free(_, Lbuf_mem_get(buf));
   LFATAL(buf->total || buf->first || buf->last);
 }
 
@@ -799,7 +832,7 @@ Lbuf_move_mem(Lbuf _, Lbuf src)
 }
 
 static Lbuf
-Lbuf_readn(Lbuf _, int fd, int max)
+Lbuf_add_readn(Lbuf _, int fd, int max)
 {
   char	buf[BUFSIZ];
   int	loops;
@@ -823,9 +856,9 @@ Lbuf_readn(Lbuf _, int fd, int max)
 }
 
 static Lbuf
-Lbuf_readall(Lbuf _, int fd)
+Lbuf_add_readall(Lbuf _, int fd)
 {
-  while (Lbuf_readn(_, fd, 0));
+  while (Lbuf_add_readn(_, fd, 0));
   return _;
 }
 
@@ -839,7 +872,7 @@ Lbuf_writer(Format *f, const void *s, size_t len)
 }
 
 static Lbuf
-Lbuf_format(Lbuf _, const char *s, ...)
+Lbuf_add_format(Lbuf _, const char *s, ...)
 {
   FormatArg	a;
   Format	f;
@@ -853,18 +886,30 @@ Lbuf_format(Lbuf _, const char *s, ...)
 
 /* toString(value)     */
 static Lbuf
-Lbuf_from_val_dec(Lval v)
+Lbuf_from_val(Lval v)
 {
   L    _ = v->ptr._;
 
   switch (v->ptr.type)
     {
-    case LNUM: return Lbuf_format(Lbuf_dec(Lbuf_new(_)), FORMAT_I(v->num.num), NULL);
+    case LNUM: return Lbuf_add_format(Lbuf_dec(Lbuf_new(_)), FORMAT_I(v->num.num), NULL);
     case LBUF: return &v->buf;
     }
-  Lunknown(_, FORMAT_V(v), " has no ASCII representation", NULL);
   return 0;
 }
+
+static Lbuf
+Lbuf_add_tmp(Lbuf _, Ltmp tmp, int (*proc)(Ltmp, void *buf, int max))
+{
+  int	len;
+  Lmem	mem;
+
+  len	= proc(tmp, NULL, 0);
+  mem	= Lbuf_mem_new(_, len);
+  proc(tmp, mem->data, len);
+  return _;
+}
+
 
 /* Liter *************************************************************/
 
@@ -906,6 +951,35 @@ Liter_getc(Liter _)
   return c; 
 }
 
+/* Llist *************************************************************/
+/* Llist *************************************************************/
+
+static Llist
+Llist_push(Llist list, const void *ptr, size_t len)
+{
+  L	_ = list->ptr._;
+  Lmem	mem;
+
+  mem		= Lmem_dup(_, ptr, len);
+  mem->next	= list->first;
+  list->first	= mem;
+  return list;
+}
+
+static Llist
+Llist_pop(Llist list, void *ptr, size_t len)
+{
+  L	_ = list->ptr._;
+  Lmem	mem;
+
+  mem		= list->first;
+  list->first	= mem;
+
+  LFATAL(!mem || mem->len != len);
+  memcpy(ptr, mem->data, len);
+  L_mem_free(_, mem);
+  return list;
+}
 
 /* Ltmp **************************************************************/
 /* Ltmp **************************************************************/
@@ -930,7 +1004,54 @@ Ltmp_add_c(Ltmp _, char c)
   return _;
 }
 
+static int
+Ltmp_proc_copy(Ltmp _, void *ptr, int len)
+{
+  if (ptr)
+    {
+      LFATAL(len != _->pos);
+      memcpy(ptr, _->buf, len);
+    }
+  return _->pos;
+}
 
+static int
+unhex(char c)
+{
+  if (c>='0' && c<='9')
+    return c-'0';
+  if (c>='a' && c<='f')
+    return c-'a'+10;
+  if (c>='A' && c<='F')
+    return c-'A'+10;
+  return -1;
+}
+
+static int
+Ltmp_proc_hex(Ltmp _, void *_ptr, int len)
+{
+  LFATAL(_->pos & 1, "hex strings must come in HEX pairs");
+  if (_ptr)
+    {
+      char		*i = _->buf;
+      unsigned char	*o = _ptr;
+      int		n;
+
+      LFATAL(len != _->pos/2);
+      for (n=len; --n>=0; )
+        {
+          int	x;
+          unsigned char c1, c2;
+
+          c1	= *i++;
+          c2	= *i++;
+          x	= (unhex(c1)<<4) | unhex(c2);
+          LFATAL(x<0, "non-hex digit in [HEX] constant: ", FORMAT_C(c1), FORMAT_C(c2));
+          *o++	= x;
+        }
+    }
+  return _->pos / 2;
+}
 
 
 /* Lio ***************************************************************/
@@ -948,7 +1069,7 @@ Lio_get_buf(Lio io, size_t max)
           buf		= io->buf;
           io->buf	= 0;
           io->pos	= 0;
-	  return buf;	/* input buffer fits query, so return it	*/
+          return buf;	/* input buffer fits query, so return it	*/
         }
       if (io->buf->first->len <= max)
         {
@@ -977,7 +1098,7 @@ Lio_get_buf(Lio io, size_t max)
   io->pos	+= max;
   if (io->pos >= mem->len)
     {
-      L_free(_, Lbuf_mem_get(io->buf));
+      L_mem_free(_, Lbuf_mem_get(io->buf));
       io->pos	= 0;
     }
   return buf;
@@ -1017,9 +1138,16 @@ Lrun_finish(Lrun _)
 /* Lfn ***************************************************************/
 
 static void
-Lpush_reg(L _, Larg a)
+Lpush_arg_inc(Lrun _, Larg a)
 {
-  Larg	s;
+  Lpush_inc(a.val);
+}
+
+static void
+Lpush_reg(Lrun run, Larg a)
+{
+  L		_ = run->ptr._;
+  Larg		s;
 
   s	= _->stack[1+a.i]->arg;
   if (!s.val)
@@ -1031,8 +1159,9 @@ Lpush_reg(L _, Larg a)
 }
 
 static void
-Lpop_into_reg(L _, Larg a)
+Lpop_into_reg(Lrun run, Larg a)
 {
+  L		_ = run->ptr._;
   Lstack	s;
   Lval		v;
 
@@ -1044,27 +1173,28 @@ Lpop_into_reg(L _, Larg a)
 }
 
 static void
-Ladd(L _, Larg a)	/* a unused	*/
+Ladd(Lrun run, Larg a)	/* a unused	*/
 {
-  Lval	v1, v2, v;
+  L		_ = run->ptr._;
+  Lval		v1, v2, v;
 
   v1	= Lpop_dec(_);
   v2	= Lpop_dec(_);
   v	= Lpush_dec(Lval_new(_, v2->ptr.type));
   switch (v2->ptr.type)
     {
-    default:	Lunknown(_, FORMAT_V(v2), "+", FORMAT_V(v1), NULL);
+    default:	return Lunknown(run, FORMAT_V(v2), "+", FORMAT_V(v1), NULL);
     case LNUM:
       switch (v1->ptr.type)
         {
-        default:	Lunknown(_, FORMAT_V(v2), "+", FORMAT_V(v1), NULL);
+        default:	return Lunknown(run, FORMAT_V(v2), "+", FORMAT_V(v1), NULL);
         case LNUM:	v->num.num	= v2->num.num+v1->num.num;			break;
         }
       break;
     case LBUF:
       switch (v1->ptr.type)
         {
-        default:	Lunknown(_, FORMAT_V(v2), "+", FORMAT_V(v1), NULL);
+        default:	return Lunknown(run, FORMAT_V(v2), "+", FORMAT_V(v1), NULL);
         case LBUF:	Lbuf_add_buf(Lbuf_add_buf(&v->buf, &v2->buf), &v1->buf);	break;
         }
       break;
@@ -1072,8 +1202,9 @@ Ladd(L _, Larg a)	/* a unused	*/
 }
 
 static void
-Lmul(L _, Larg a)	/* a unused	*/
+Lmul(Lrun run, Larg a)	/* a unused	*/
 {
+  L		_ = run->ptr._;
   Lval	v1, v2, v;
 
   v1	= Lpop_dec(_);
@@ -1081,11 +1212,11 @@ Lmul(L _, Larg a)	/* a unused	*/
   v	= Lpush_dec(Lval_new(_, v2->ptr.type));
   switch (v2->ptr.type)
     {
-    default:	Lunknown(_, FORMAT_V(v2), ".", FORMAT_V(v1), NULL);
+    default:	return Lunknown(run, FORMAT_V(v2), ".", FORMAT_V(v1), NULL);
     case LNUM:
       switch (v1->ptr.type)
         {
-        default:	Lunknown(_, FORMAT_V(v2), ".", FORMAT_V(v1), NULL);
+        default:	return Lunknown(run, FORMAT_V(v2), ".", FORMAT_V(v1), NULL);
         case LNUM:	v->num.num	= v2->num.num*v1->num.num;			break;
         }
       break;
@@ -1093,8 +1224,9 @@ Lmul(L _, Larg a)	/* a unused	*/
 }
 
 static void
-Ldiv(L _, Larg a)	/* a unused	*/
+Ldiv(Lrun run, Larg a)	/* a unused	*/
 {
+  L		_ = run->ptr._;
   Lval	v1, v2, va, vb;
 
   v1	= Lpop_dec(_);
@@ -1103,11 +1235,11 @@ Ldiv(L _, Larg a)	/* a unused	*/
   vb	= Lpush_dec(Lval_new(_, v2->ptr.type));
   switch (v2->ptr.type)
     {
-    default:	Lunknown(_, FORMAT_V(v2), ":", FORMAT_V(v1), NULL);
+    default:	return Lunknown(run, FORMAT_V(v2), ":", FORMAT_V(v1), NULL);
     case LNUM:
       switch (v1->ptr.type)
         {
-        default:	Lunknown(_, FORMAT_V(v2), ":", FORMAT_V(v1), NULL);
+        default:	return Lunknown(run, FORMAT_V(v2), ":", FORMAT_V(v1), NULL);
         case LNUM:
           /* v2 * va + vb == v1	*/
           if (v2->num.num == 0)
@@ -1142,8 +1274,9 @@ Ldiv(L _, Larg a)	/* a unused	*/
 }
 
 static void
-Lsub(L _, Larg a)	/* a unused	*/
+Lsub(Lrun run, Larg a)	/* a unused	*/
 {
+  L		_ = run->ptr._;
   Lval	v1, v2, v;
 
   v1	= Lpop_dec(_);
@@ -1151,11 +1284,11 @@ Lsub(L _, Larg a)	/* a unused	*/
   v	= Lpush_dec(Lval_new(_, v2->ptr.type));
   switch (v2->ptr.type)
     {
-    default:	Lunknown(_, FORMAT_V(v2), "-", FORMAT_V(v1), NULL);
+    default:	return Lunknown(run, FORMAT_V(v2), "-", FORMAT_V(v1), NULL);
     case LNUM:
       switch (v1->ptr.type)
         {
-        default:	Lunknown(_, FORMAT_V(v2), "-", FORMAT_V(v1), NULL);
+        default:	return Lunknown(run, FORMAT_V(v2), "-", FORMAT_V(v1), NULL);
         case LNUM:	v->num.num	= v2->num.num-v1->num.num;			break;
         }
       break;
@@ -1166,8 +1299,9 @@ Lsub(L _, Larg a)	/* a unused	*/
  * This should be nonblocking and asynchronous and left to the main loop
  */
 static void
-Li(L _, Larg a)
+Li(Lrun run, Larg a)
 {
+  L		_ = run->ptr._;
   Lio		input;
   long long	max;
   Lval		v;
@@ -1179,7 +1313,7 @@ Li(L _, Larg a)
   v	= Lpop_dec(_);
   switch (v->ptr.type)
     {
-    default:	Lunknown(_, FORMAT_V(v), "<", NULL);
+    default:	return Lunknown(run, FORMAT_V(v), "<", NULL);
     case LNUM:
       break;
     }
@@ -1196,13 +1330,13 @@ Li(L _, Larg a)
 
       if (!input->buf)
         input->buf	= Lbuf_new(_);
-      if (!Lbuf_readn(input->buf, input->fd, max < BUFSIZ ? BUFSIZ : max))
+      if (!Lbuf_add_readn(input->buf, input->fd, max < BUFSIZ ? BUFSIZ : max))
         {
-	  /* kick buffer on EOF	*/
-	  Lptr_dec(&input->buf->ptr);
-	  input->buf	= 0;
+          /* kick buffer on EOF	*/
+          Lptr_dec(&input->buf->ptr);
+          input->buf	= 0;
           input->eof	= 1;
-	}
+        }
     }
   if (input->eof)
     {
@@ -1219,12 +1353,24 @@ Li(L _, Larg a)
   Lpush_dec(ret.val);
 }
 
+static Lbuf
+Lrun_buf_from_val(Lrun run, Lval v)
+{
+  Lbuf	buf;
+
+  buf	= Lbuf_from_val(v);
+  if (!buf)
+    Lunknown(run, FORMAT_V(v), " has no ASCII representation", NULL);
+  return buf;
+}
+
 /* XXX TODO XXX
  * This should be nonblocking and asynchronous and left to the main loop
  */
 static void
-Lo(L _, Larg a)
+Lo(Lrun run, Larg a)
 {
+  L		_ = run->ptr._;
   Lio	out;
   Lbuf	buf;
 
@@ -1233,7 +1379,9 @@ Lo(L _, Larg a)
   if (out->eof)
     return;
 
-  buf	= Lbuf_from_val_dec(Lpop_dec(_));
+  buf	= Lrun_buf_from_val(run, Lpop_dec(_));
+  if (!buf)
+    return;
 
   /* Following should use Liter,
    * but this is not prepared yet
@@ -1245,14 +1393,14 @@ Lo(L _, Larg a)
       put	= write_all(out->fd, m->data, m->len);
       if (put != m->len)
         {
-	  out->eof	= 1;
-	  break;
-	}
+          out->eof	= 1;
+          break;
+        }
     }
 }
 
 static void
-Lfunc(L _, Larg a)
+Lfunc(Lrun run, Larg a)
 {
   LFATAL(1, "$ not yet implemented");
 }
@@ -1290,21 +1438,22 @@ Lbuf_cmp(Lbuf a, Lbuf b)
 
       if ((x+=max) >= m->len)
         {
-	  m	= m->next;
-	  x	= 0;
-	}
+          m	= m->next;
+          x	= 0;
+        }
       if ((y+=max) >= n->len)
         {
-	  n	= n->next;
-	  y	= 0;
-	}
+          n	= n->next;
+          y	= 0;
+        }
     }
   return m ? -1 : n ? 1 : 0;
 }
 
 static void
-Lcmp(L _, Larg a)
+Lcmp(Lrun run, Larg a)
 {
+  L		_ = run->ptr._;
   Larg	a1, a2;
   Larg	ret;
   int	cmp;
@@ -1314,12 +1463,14 @@ Lcmp(L _, Larg a)
 
   if (a1.ptr->type != a2.ptr->type)
     {
-      a1.buf	= Lbuf_from_val_dec(a1.val);
-      a2.buf	= Lbuf_from_val_dec(a2.val);
+      a1.buf	= Lrun_buf_from_val(run, a1.val);
+      if (!a1.buf) return;
+      a2.buf	= Lrun_buf_from_val(run, a2.val);
+      if (!a2.buf) return;
     }
   switch (a1.ptr->type)
     {
-    default:	Lunknown(_, FORMAT_V(a1.val), " type ", FORMAT_V(a1.val), " cannot be compared (yet)", NULL);
+    default:	return Lunknown(run, FORMAT_V(a1.val), " type ", FORMAT_V(a1.val), " cannot be compared (yet)", NULL);
     case LNUM:	cmp	= Lnum_cmp(a1.num, a2.num);	break;
     case LBUF:	cmp	= Lbuf_cmp(a1.buf, a2.buf);	break;
     }
@@ -1328,33 +1479,78 @@ Lcmp(L _, Larg a)
 }
 
 static void
-Lnot(L _, Larg a)
+Lnot(Lrun run, Larg a)
 {
+  L		_ = run->ptr._;
   Larg	a1, ret;
 
   a1.val	= Lpop_dec(_);
   switch (a1.ptr->type)
     {
-    default:	Lunknown(_, FORMAT_V(a1.val), " cannot apply function not to type ", FORMAT_V(a1.val), " (yet?)", NULL);
+    default:	return Lunknown(run, FORMAT_V(a1.val), " cannot apply function not to type ", FORMAT_V(a1.val), " (yet?)", NULL);
     case LNUM:	ret.num	= Lnum_set_i(Lnum_new(_), !a1.num->num);	break;
     }
   Lpush_dec(ret.val);
 }
 
 static void
-Lneg(L _, Larg a)
+Lneg(Lrun run, Larg a)
 {
-  Larg	a1, ret;
+  L		_ = run->ptr._;
+  Larg		a1, ret;
 
   a1.val	= Lpop_dec(_);
   switch (a1.ptr->type)
     {
-    default:	Lunknown(_, FORMAT_V(a1.val), " cannot apply function not to type ", FORMAT_V(a1.val), " (yet?)", NULL);
+    default:	return Lunknown(run, FORMAT_V(a1.val), " cannot apply function not to type ", FORMAT_V(a1.val), " (yet?)", NULL);
     case LNUM:	ret.num	= Lnum_set_i(Lnum_new(_), ~a1.num->num);	break;
     }
   Lpush_dec(ret.val);
 }
 
+static int
+Lrun_tos_cond(Lrun run)
+{
+  L		_ = run->ptr._;
+  Larg		a1;
+
+  a1.val	= Lpop_dec(_);
+  if (a1.val)
+    switch (a1.ptr->type)
+      {
+      default:	Lunknown(run, FORMAT_V(a1.val), " unsuitable ", FORMAT_V(a1.val), " condition for {_}", NULL); return -1;
+      case LNUM: if (a1.num->num) return 1; break;
+      case LBUF: if (a1.buf->total) return 1; break;
+      }
+  return 0;
+}
+
+/* a.i: loop start
+ */
+static void
+Lrun_loop(Lrun run, Larg a)
+{
+  if (Lrun_tos_cond(run) == 1)
+    run->pos	= a.i;		/*  take the loop again	*/
+}
+
+/* a.i: Loop end
+ */
+static void
+Lrun_loop0(Lrun run, Larg a)
+{
+  if (Lrun_tos_cond(run) == 0)
+    run->pos	= a.i+1;	/* do not take the loop	*/
+}
+
+/* a.i: Loop start
+ */
+static void
+Lrun_loop1(Lrun run, Larg a)
+{
+  if (Lrun_tos_cond(run) == 1)
+    run->pos	= a.i+1;	/* take the loop again	*/
+}
 
 static void ___here___(void) { 000; }	/* Add mode Lfn here	*/
 
@@ -1375,7 +1571,7 @@ Lbuf_load(Lbuf _, const char *s)
 
   if ((fd=open(s, O_RDONLY))<0)
     Loops(_->ptr._, "cannot load file", s, NULL);
-  Lbuf_readall(_, fd);
+  Lbuf_add_readall(_, fd);
   close(fd);
   return _;
 }
@@ -1405,34 +1601,32 @@ L_load(L _, const char *s)
 /* PARSING ***********************************************************/
 
 /*
-	_       NOP, does nothing\n"
-	0 9     push number to the stack\n"
-	A Z     push register to stack\n"
-	a z     pop TOS into register\n"
-	[xx]    push buffer to stack, xx is a sequence of hex digits\n"
-	'xx'    push string to stack as buffer\n"
-	\"x\"   push string to stack as buffer\n"
-	'x'     push string to stack as buffer\n"
+        _       NOP, does nothing\n"
+        0 9     push number to the stack\n"
+        A Z     push register to stack\n"
+        a z     pop TOS into register\n"
+        [xx]    push buffer to stack, xx is a sequence of hex digits\n"
+        'xx'    push string to stack as buffer\n"
+        \"x\"   push string to stack as buffer\n"
+        'x'     push string to stack as buffer\n"
 
 DONE:
-	>       pop TOS (Top Of Stack) and output it\n"
-	<       pop TOS giving the number of bytes to read from input into TOS\n"
-	=       compare: AB=: 0:A==B, -1:A<B, +1:A>B\n"
-	+       add to TOS.  5_3+ leaves 8 on stack\n"
-	-       substract from TOS.  5_3- leaves 2 on stack\n"
-	.       multiply TOS. 5_3x leaves 15 on stack\n"
-	:       multiply TOS. 5_3x leaves 15 on stack\n"
+        >       pop TOS (Top Of Stack) and output it\n"
+        <       pop TOS giving the number of bytes to read from input into TOS\n"
+        =       compare: AB=: 0:A==B, -1:A<B, +1:A>B\n"
+        +       add to TOS.  5_3+ leaves 8 on stack\n"
+        -       substract from TOS.  5_3- leaves 2 on stack\n"
+        .       multiply TOS. 5_3x leaves 15 on stack\n"
+        :       multiply TOS. 5_3x leaves 15 on stack\n"
 
 TODO:
-	(_)     pop TOS and repeat _ if neither stack empty nor popped TOS empty buffer nor 0\n"
+        !       not.  empty stack, empty buffer and 0 become 1, everything else 0\n"
+        ~       invert.  Inverts all bits.  On Numbers it negates, so 1 becomes -1\n"
+        | & ^   or, and, xor, works for numbers and buffer\n"
 
-	!       not.  empty stack, empty buffer and 0 become 1, everything else 0\n"
-	~       invert.  Inverts all bits.  On Numbers it negates, so 1 becomes -1\n"
-	| & ^   or, and, xor, works for numbers and buffer\n"
+        $       call builtin: 1_2'hello world'$ calls builtin 'hello world'\n"
 
-	$       call builtin: 1_2'hello world'$ calls builtin 'hello world'\n"
-
-	@       pop TOS and advance the given bytes (copy input to output)	=> Not needed
+        @       pop TOS and advance the given bytes (copy input to output)	=> Not needed
 
  *  We cannot use / ? % # as those have special meaning in URLs.
  *  \\ { } * ` ; are free, SPC is synonumous for + traditionally
@@ -1470,6 +1664,7 @@ L_parse(L _, Lbuf buf)
   pos	= 0;
   run	= Lrun_new(_);
   start	= 0;
+  match	= 0;
   for (Lbuf_iter(buf, &iter); (c = Liter_getc(&iter))>=0; )
     {
       union Larg	a;
@@ -1483,30 +1678,30 @@ L_parse(L _, Lbuf buf)
               Ltmp_add_c(tmp, c);
               continue;
             }
-	  a.buf	= Lbuf_new(_);
+          a.buf	= Lbuf_new(_);
           switch (match)
             {
-	    default:	LFATAL(1, "internal error, unknown match: ", FORMAT_C(match), NULL);
+            default:	LFATAL(1, "internal error, unknown match: ", FORMAT_C(match), NULL);
             case '"':
             case '\'':
               Lbuf_add_tmp(a.buf, tmp, Ltmp_proc_copy);
-	      break;
-	    case ']':
+              break;
+            case ']':
               Lbuf_add_tmp(a.buf, tmp, Ltmp_proc_hex);
-	      break;
+              break;
             }
-          Lrun_add(run, Lpush_arg_dec, a);
+          Lrun_add(run, Lpush_arg_inc, a);
         }
       if (c>='a' && c<='z')		{ f = Lpop_into_reg;	a.i = c-'a'; }
       else if (c>='A' && c<='Z')	{ f = Lpush_reg;	a.i = c-'A'; }
       else if (c>='0' && c<='9')
         {
           start	= 1;
-	  match	= -1;
+          match	= -1;
           continue;
         }
       else
-        switch (a.i=0, c)
+        switch (a.i=-1, c)	/* do not use other than a.i in this switch!	*/
           {
           default:
           case '_':	continue;
@@ -1524,27 +1719,31 @@ L_parse(L _, Lbuf buf)
           case '!':	f = Lnot;	break;
           case '~':	f = Lneg;	break;
 #if 0
-	  case '@':	f = LstackCount;break;
+          case '@':	f = LstackCount;break;
 #endif
           case '(':
-	    data.pos	= run->pos;
-	    data.c	= ')';
-	    data.fn	= Lrun_loop;
-            Llist_put(list, &data, sizeof data);
-            break;
+            data.c	= ')';
+            data.fn	= Lrun_loop;
+            data.pos	= run->pos;
+            Llist_push(list, &data, sizeof data);
+            continue;
           case '{':
-	    data.pos	= run->pos;
-	    data.c	= '}';
-	    data.fn	= Lrun_while;
-            Llist_put(list, &data, sizeof data);
+            data.c	= '}';
+            data.fn	= Lrun_loop1;
+            data.pos	= run->pos;
+            Llist_push(list, &data, sizeof data);
+            f	= Lrun_loop0;
             break;
           case ')':
           case '}':
-            Llist_get(list, &data, sizeof data);
+            Llist_pop(list, &data, sizeof data);
             if (c!=data.c)
               Loops(_, "encountered unpaired ", FORMAT_C(c), ", expected: ", FORMAT_C(data.c), NULL);
             f	= data.fn;
             a.i	= data.pos;
+            for (int i=a.i; i<run->pos; i++)
+              if (run->steps[a.i].arg.i == -1)
+                run->steps[a.i].arg.i	= run->pos;	/* set the break/continue position	*/
             break;
           }
       Lrun_add(run, f, a);
@@ -1552,14 +1751,50 @@ L_parse(L _, Lbuf buf)
 
   Lptr_dec(&tmp->ptr);
   Lptr_dec(&list->ptr);
+
+  run->cnt	= run->pos;
+  run->pos	= 0;
   Lptr_push_stack_dec(&run->ptr, &_->run);
+
   return _;
 }
 
 static L
-L_run(L _)
+L_step(L _)
 {
-  000;
+  Lstack	*last, stack;
+
+  /* Cleanup freed structures	*/
+  while (_->free)
+    L_ptr_free(&_->free->ptr);
+  
+  last	= &_->run;
+  while ((stack = *last)!=0)
+    {
+      struct Lstep	*step;
+      Lrun		run;
+
+      run	= stack->arg.run;
+      if (run->pos >= run->cnt)
+        {
+	  /* program has reached it's end	*/
+          *last		= stack->next;
+          stack->next	= _->end;
+          _->end	= stack;
+          continue;
+        }
+      step	= &run->steps[run->pos++];
+      step->fn(run, step->arg);
+      last	= &(*last)->next;
+    }
+  return _;
+}
+
+static L
+L_loop(L _)
+{
+  while (_->run)
+    L_step(_);
   return _;
 }
 
@@ -1570,7 +1805,7 @@ main(int argc, char **argv)
 
   _	= L_init(NULL, NULL);
   L_load(_, argv[1]);
-  L_run(_);
+  L_loop(_);
   return Lexit(_);
 }
 
