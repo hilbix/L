@@ -18,11 +18,11 @@
 #include <fcntl.h>
 
 #if	1
-#define	D(...)	do { L_stderr(NULL, "[[", __FILE__, ":", FORMAT_I(__LINE__), " ", __func__, "(", ##__VA_ARGS__, ")]]\n", NULL); } while (0)
+#define	DP(...)	do { L_stderr(NULL, "[[", __FILE__, ":", FORMAT_I(__LINE__), " ", __func__, "]", ##__VA_ARGS__, "]\n", NULL); } while (0)
 #else
-#define	D	xD
+#define	DP	xDP
 #endif
-#define	xD(...)	do {} while (0)
+#define	xDP(...)	do {} while (0)
 
 
 /* Structures ********************************************************/
@@ -46,6 +46,12 @@ typedef union Larg	Larg;
 
 typedef void (		*Lfn)(Lrun, Larg);
 
+enum Lwarns
+  {
+    LW_UNDERRUN,
+    LW_MAX_
+  };
+
 struct L
   {
     Lstack		stack[1+'Z'-'A'+1];
@@ -59,6 +65,7 @@ struct L
 
     void		*user;
 
+    unsigned char	warns[(LW_MAX_+7)/8];
     unsigned		allocated:1;
   };
 
@@ -141,6 +148,7 @@ union Larg
   {
     int			i;
     unsigned		c;
+    long long		l;
 
     Lval		val;
 
@@ -198,6 +206,7 @@ enum
     F_I,
     F_C,
     F_V,
+    F_X,
   };
 
 
@@ -205,11 +214,30 @@ enum
 /* Auxiliary *********************************************************/
 /* Auxiliary *********************************************************/
 
+static int
+bit(unsigned char *bits, int bit)
+{
+  return bits[bit/8] & (1<<(bit&7));
+}
+
+static void
+bit_set(unsigned char *bits, int bit)
+{
+  bits[bit/8] |= (1<<(bit&7));
+}
+
+static void
+bit_clr(unsigned char *bits, int bit)
+{
+  bits[bit/8] &= ~(1<<(bit&7));
+}
+
 #define	FORMAT_A(A)	(char *)F_A, &(A)
 #define	FORMAT_U(U)	(char *)F_U, (unsigned long long)(U)
 #define	FORMAT_I(I)	(char *)F_I, (long long)(I)
 #define	FORMAT_C(C)	(char *)F_C, (unsigned)(C)
 #define	FORMAT_V(V)	(char *)F_V, V
+#define	FORMAT_X(X)	(char *)F_X, &(X), sizeof(X)
 
 static void Loops(L, ...);
 #define	LFATAL(X,...)	do { if (X) Loops(NULL, "FATAL ERROR: ", __FILE__, " ", FORMAT_I(__LINE__), " ", __func__, ": ", #X, ##__VA_ARGS__, NULL); } while (0)
@@ -295,22 +323,57 @@ writer(Format *f, const void *s, size_t len)
   write_all(f->fd, s, len);
 }
 
+static char
+hex_nibble(unsigned char c)
+{
+  c	&= 0xf;
+  return c<=9 ? '0'+c : 'A'+c-10;
+}
+
 static void
-FORMAT(struct Format *f, struct FormatArg *v)
+FORMATX(struct Format *f, const unsigned char *ptr, size_t len)
+{
+  char	buf[100];
+
+  if (!ptr)
+    return f->out(f, "(null)", 6);
+  f->out(f, "[", 1);
+  for (int i=0; i<len; i++)
+    {
+      buf[0]	= hex_nibble(ptr[i]>>4);
+      buf[1]	= hex_nibble(ptr[i]);
+      f->out(f, buf, 2);
+    }
+  f->out(f, "]", 1);
+}
+
+static void
+FORMAT(struct Format *f, struct FormatArg *a)
 {
   const char	*s;
 
-  while ((s=va_arg(v->l, const char *)) != 0)
+  while ((s=va_arg(a->l, const char *)) != 0)
     {
       switch ((unsigned long long)s)
         {
-        unsigned u;
+        unsigned	u;
+	Lval		v;
 
-        case F_A:	FORMAT(f, va_arg(v->l, struct FormatArg *)); continue;
-        case F_U:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%llu", va_arg(v->l, unsigned long long));	break;
-        case F_I:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%lld", va_arg(v->l, long long));		break;
-        case F_C:	s=f->buf; u = va_arg(v->l, unsigned); snprintf(f->buf, sizeof f->buf, "%c(%02x)", isprint(u) ? u : '.', u);			break;
-        case F_V:	s=Ltypes[va_arg(v->l, Lval)->ptr.type];							break;
+        case F_A:	FORMAT(f, va_arg(a->l, struct FormatArg *)); continue;
+        case F_U:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%llu", va_arg(a->l, unsigned long long));	break;
+        case F_I:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%lld", va_arg(a->l, long long));		break;
+        case F_C:	s=f->buf; u = va_arg(a->l, unsigned); snprintf(f->buf, sizeof f->buf, "%c(%02x)", isprint(u) ? u : '?', u);			break;
+        case F_V:	v=va_arg(a->l, Lval); s=v ? Ltypes[v->ptr.type] : "(null)";				break;
+	case F_X:
+	  {
+	    const void	*ptr;
+	    size_t	len;
+
+	    ptr	= va_arg(a->l, const void *);
+	    len	= va_arg(a->l, size_t);
+	    FORMATX(f, ptr, len);
+	    continue;
+	  }
         }
       f->out(f, s, strlen(s));
     }
@@ -321,14 +384,27 @@ FORMAT(struct Format *f, struct FormatArg *v)
 #define	FORMAT_END(A)		do { va_end(A.l); } while (0)
 
 static L
-L_stderr(L _, const char *s, ...)
+L_stderr(L _, ...)
 {
   FormatArg	a;
   Format	f;
 
   FORMAT_INIT(f, writer, 2, _);
-  FORMAT_START(a, s);
+  FORMAT_START(a, _);
   FORMAT(&f, &a);
+  FORMAT_END(a);
+  return _;
+}
+
+static L
+L_warn(L _, enum Lwarns w, ...)
+{
+  FormatArg	a;
+  if (bit(_->warns, w))
+    return _;
+  bit_set(_->warns, w);
+  FORMAT_START(a, w);
+  L_stderr(_, "WARN: ", FORMAT_A(a), "\n", NULL);
   FORMAT_END(a);
   return _;
 }
@@ -566,6 +642,7 @@ Lptr_move(Lptr _, Lval *list)
 static Lptr
 Lptr_inc(Lptr _)
 {
+  xDP(FORMAT_X(_), FORMAT_V(_));
   if (_->overuse)
     return _;
   if (!_->use)
@@ -648,7 +725,10 @@ Lval_pop_stack_inc(L _, Lstack *stack)
 
   s		= *stack;
   if (!s)
-    return 0;
+    {
+      L_warn(_, LW_UNDERRUN, "stack underrun", NULL);
+      return 0;
+    }
   *stack	= s->next;
   v		= s->arg.val;
   s->arg.val	= 0;
@@ -675,6 +755,8 @@ Lval_pop_inc(L _, int nr)
 static Lval
 Ldec(Larg _)
 {
+  if (!_.ptr)
+    return 0;
   Lptr_dec(&_.val->ptr);
   return _.val;
 }
@@ -779,11 +861,12 @@ Lbuf_mem_get(Lbuf _)
 
   mem	= _->first;
   LFATAL(!mem);
-  _->total	=- mem->len;
+  _->total	-= mem->len;
   _->first	= mem->next;
   if (!_->first)
     {
-      LFATAL(_->last != mem || _->total);
+      LFATAL(_->last != mem);
+      LFATAL(_->total);
       _->last	= 0;
     }
   mem->next	= 0;
@@ -879,13 +962,13 @@ Lbuf_writer(Format *f, const void *s, size_t len)
 }
 
 static Lbuf
-Lbuf_add_format(Lbuf _, const char *s, ...)
+Lbuf_add_format(Lbuf _, ...)
 {
   FormatArg	a;
   Format	f;
 
   FORMAT_INIT(f, Lbuf_writer, 2, _);
-  FORMAT_START(a, s);
+  FORMAT_START(a, _);
   FORMAT(&f, &a);
   FORMAT_END(a);
   return _;
@@ -1153,6 +1236,7 @@ Lrun_add(Lrun _, Lfn fn, union Larg arg)
 {
   struct Lstep	*step;
 
+  xDP(FORMAT_X(fn), FORMAT_X(arg));
   if (_->pos >= _->cnt)
     _->steps	= Lrealloc(_->ptr._, _->steps, (_->cnt += 1024) * sizeof *_->steps);
   step		= &_->steps[_->pos++];
@@ -1220,6 +1304,17 @@ Ladd(Lrun run, Larg a)	/* a unused	*/
 
   v1	= Lpop_dec(_);
   v2	= Lpop_dec(_);
+  DP(FORMAT_V(v1), "+", FORMAT_V(v2));
+  if (!v1)
+    {
+      Lpush_dec(Lval_new(_, LBUF));
+      return;
+    }
+  if  (!v2)
+    {
+      Lpush_inc(v1);
+      return;
+    }
   v	= Lpush_dec(Lval_new(_, v2->ptr.type));
   switch (v2->ptr.type)
     {
@@ -1370,10 +1465,10 @@ Li(Lrun run, Larg a)
 
       if (!input->buf)
         input->buf	= Lbuf_new(_);
-      D("read", FORMAT_I(max));
+      DP("read", FORMAT_I(max));
       if (!Lbuf_add_readn(input->buf, input->fd, max<BUFSIZ ? BUFSIZ : max))
         {
-	  D("EOF");
+	  DP("EOF");
           /* kick buffer on EOF	*/
           Lptr_dec(&input->buf->ptr);
           input->buf	= 0;
@@ -1387,7 +1482,7 @@ Li(Lrun run, Larg a)
       return;		/* return empty buffer (or 0) on EOF	*/
     }
   LFATAL(!input->buf);
-  D("have=", FORMAT_I(input->buf->total), " pos=", FORMAT_I(input->pos), " out=", FORMAT_I(max));
+  DP("have=", FORMAT_I(input->buf->total), " pos=", FORMAT_I(input->pos), " out=", FORMAT_I(max));
 
   if (!max)
     ret.num	= Lnum_set_size(Lnum_new(_), input->buf->total - input->pos);	/* return number of bytes available	*/
@@ -1413,7 +1508,7 @@ Lrun_buf_from_val(Lrun run, Lval v)
 static void
 Lo(Lrun run, Larg a)
 {
-  L		_ = run->ptr._;
+  L	_ = run->ptr._;
   Lio	out;
   Lbuf	buf;
 
@@ -1496,7 +1591,7 @@ Lbuf_cmp(Lbuf a, Lbuf b)
 static void
 Lcmp(Lrun run, Larg a)
 {
-  L		_ = run->ptr._;
+  L	_ = run->ptr._;
   Larg	a1, a2;
   Larg	ret;
   int	cmp;
@@ -1524,7 +1619,7 @@ Lcmp(Lrun run, Larg a)
 static void
 Lnot(Lrun run, Larg a)
 {
-  L		_ = run->ptr._;
+  L	_ = run->ptr._;
   Larg	a1, ret;
 
   a1.val	= Lpop_dec(_);
@@ -1539,8 +1634,8 @@ Lnot(Lrun run, Larg a)
 static void
 Lneg(Lrun run, Larg a)
 {
-  L		_ = run->ptr._;
-  Larg		a1, ret;
+  L	_ = run->ptr._;
+  Larg	a1, ret;
 
   a1.val	= Lpop_dec(_);
   switch (a1.ptr->type)
@@ -1554,8 +1649,8 @@ Lneg(Lrun run, Larg a)
 static int
 Lrun_tos_cond(Lrun run)
 {
-  L		_ = run->ptr._;
-  Larg		a1;
+  L	_ = run->ptr._;
+  Larg	a1;
 
   a1.val	= Lpop_dec(_);
   if (a1.val)
@@ -1713,11 +1808,13 @@ L_parse(L _, Lbuf buf)
       union Larg	a;
       Lfn		f;
 
+      a.l	= -1;
       pos++;
       if (start)
         {
           if (match && (match>0 ? match!=c : (c>='0' && c<='9')))
             {
+              xDP(".", FORMAT_C(c));
               Ltmp_add_c(tmp, c);
               continue;
             }
@@ -1734,12 +1831,16 @@ L_parse(L _, Lbuf buf)
               a.buf	= Lbuf_add_tmp(Lbuf_new(_), tmp, Ltmp_proc_copy);
               break;
             case ']':
-              Lbuf_add_tmp(Lbuf_new(_), tmp, Ltmp_proc_hex);
+              a.buf	= Lbuf_add_tmp(Lbuf_new(_), tmp, Ltmp_proc_hex);
               break;
             }
 	  tmp->pos	= 0;
           Lrun_add(run, Lpush_arg_inc, a);
+	  start	= 0;
+	  if (match>0)
+	    continue;
         }
+      DP("+", FORMAT_C(c));
       if (c>='a' && c<='z')		{ f = Lpop_into_reg;	a.i = c-'a'; }
       else if (c>='A' && c<='Z')	{ f = Lpush_reg;	a.i = c-'A'; }
       else if (c>='0' && c<='9')
@@ -1750,10 +1851,12 @@ L_parse(L _, Lbuf buf)
           continue;
         }
       else
-        switch (a.i=-1, c)	/* do not use other than a.i in this switch!	*/
+        switch (c)	/* do not use other than a.i in this switch!	*/
           {
           default:
-          case '_':	continue;
+	    if (!isspace(c)) Loops(_, "unknown input ", FORMAT_C(c));
+          case '_':
+	    continue;
           case '"':	start=1; match='"'; continue;
           case '\'':	start=1; match='\''; continue;
           case '[':	start=1; match=']'; continue;
@@ -1815,7 +1918,10 @@ L_step(L _)
 
   /* Cleanup freed structures	*/
   while (_->free)
-    L_ptr_free(&_->free->ptr);
+    {
+      DP("free", FORMAT_X(_->free));
+      L_ptr_free(&_->free->ptr);
+    }
   
   last	= &_->run;
   while ((stack = *last)!=0)
@@ -1832,7 +1938,9 @@ L_step(L _)
           _->end	= stack;
           continue;
         }
-      step	= &run->steps[run->pos++];
+      step	= &run->steps[run->pos];
+      xDP(FORMAT_I(run->pos), FORMAT_X(step->fn), FORMAT_X(step->arg));
+      run->pos++;
       step->fn(run, step->arg);
       last	= &(*last)->next;
     }
@@ -1852,10 +1960,11 @@ main(int argc, char **argv)
 {
   L _;
 
-  D();
+  DP();
   _	= L_init(NULL, NULL);
   L_load(_, argv[1]);
   L_loop(_);
+  DP(" end");
   return Lexit(_);
 }
 
