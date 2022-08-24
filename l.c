@@ -1711,18 +1711,23 @@ L_parse(L _, Lbuf buf)
               Ltmp_add_c(tmp, c);
               continue;
             }
-          a.buf	= Lbuf_new(_);
           switch (match)
             {
             default:	LFATAL(1, "internal error, unknown match: ", FORMAT_C(match), NULL);
+	    case -1:
+	      Ltmp_add_c(tmp, 0);
+              a.num		= Lnum_new(_);
+	      a.num->num	= strtoll(tmp->buf, NULL, 10);
+	      break;
             case '"':
             case '\'':
-              Lbuf_add_tmp(a.buf, tmp, Ltmp_proc_copy);
+              a.buf	= Lbuf_add_tmp(Lbuf_new(_), tmp, Ltmp_proc_copy);
               break;
             case ']':
-              Lbuf_add_tmp(a.buf, tmp, Ltmp_proc_hex);
+              Lbuf_add_tmp(Lbuf_new(_), tmp, Ltmp_proc_hex);
               break;
             }
+	  tmp->pos	= 0;
           Lrun_add(run, Lpush_arg_inc, a);
         }
       if (c>='a' && c<='z')		{ f = Lpop_into_reg;	a.i = c-'a'; }
