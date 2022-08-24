@@ -17,6 +17,14 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#if	1
+#define	D(...)	do { L_stderr(NULL, "[[", __FILE__, ":", FORMAT_I(__LINE__), " ", __func__, "(", ##__VA_ARGS__, ")]]\n", NULL); } while (0)
+#else
+#define	D	xD
+#endif
+#define	xD(...)	do {} while (0)
+
+
 /* Structures ********************************************************/
 /* Structures ********************************************************/
 /* Structures ********************************************************/
@@ -171,7 +179,6 @@ struct Lmem
 
 typedef struct FormatArg
   {
-    const char	*s;
     va_list	l;
   } FormatArg;
 
@@ -204,7 +211,7 @@ enum
 #define	FORMAT_C(C)	(char *)F_C, (unsigned)(C)
 #define	FORMAT_V(V)	(char *)F_V, V
 
-static void Loops(L, const char *, ...);
+static void Loops(L, ...);
 #define	LFATAL(X,...)	do { if (X) Loops(NULL, "FATAL ERROR: ", __FILE__, " ", FORMAT_I(__LINE__), " ", __func__, ": ", #X, ##__VA_ARGS__, NULL); } while (0)
 
 enum Ltype
@@ -293,7 +300,7 @@ FORMAT(struct Format *f, struct FormatArg *v)
 {
   const char	*s;
 
-  for (s=v->s; s; s=va_arg(v->l, const char *))
+  while ((s=va_arg(v->l, const char *)) != 0)
     {
       switch ((unsigned long long)s)
         {
@@ -310,7 +317,7 @@ FORMAT(struct Format *f, struct FormatArg *v)
 }
 
 #define	FORMAT_INIT(F,OUT,FD,U)	do { F.out = OUT; F.fd = FD; F.user = U; } while (0)
-#define	FORMAT_START(A,S)	do { A.s = S; va_start(A.l, S); } while (0)
+#define	FORMAT_START(A,S)	do { va_start(A.l, S); } while (0)
 #define	FORMAT_END(A)		do { va_end(A.l); } while (0)
 
 static L
@@ -327,12 +334,12 @@ L_stderr(L _, const char *s, ...)
 }
 
 static void
-Loops(L _, const char *s, ...)
+Loops(L _, ...)
 {
   int			e=errno;
   struct FormatArg	a;
 
-  FORMAT_START(a, s);
+  FORMAT_START(a, _);
   L_stderr(_, "OOPS: ", FORMAT_A(a), NULL);
   FORMAT_END(a);
   if (e)
@@ -342,12 +349,12 @@ Loops(L _, const char *s, ...)
 }
 
 static void
-Lunknown(Lrun run, const char *s, ...)
+Lunknown(Lrun run, ...)
 {
   struct FormatArg	a;
 
-  FORMAT_START(a, s);
-  L_stderr(run->ptr._, "unknown operation: ", FORMAT_A(a), NULL);
+  FORMAT_START(a, run);
+  Loops(run->ptr._, "unknown operation: ", FORMAT_A(a), "\n", NULL);
   FORMAT_END(a);
 }
 
@@ -1358,13 +1365,15 @@ Li(Lrun run, Larg a)
   if (!input->eof && (!input->buf || input->pos >= input->buf->total))
     {
       /* no cached input yet	*/
-      LFATAL(a.i<0, ": nonblocking read not yet implemented");
+      LFATAL(v->num.num<0, ": nonblocking read not yet implemented");
       LFATAL(input->pos);
 
       if (!input->buf)
         input->buf	= Lbuf_new(_);
-      if (!Lbuf_add_readn(input->buf, input->fd, max < BUFSIZ ? BUFSIZ : max))
+      D("read", FORMAT_I(max));
+      if (!Lbuf_add_readn(input->buf, input->fd, max<BUFSIZ ? BUFSIZ : max))
         {
+	  D("EOF");
           /* kick buffer on EOF	*/
           Lptr_dec(&input->buf->ptr);
           input->buf	= 0;
@@ -1378,6 +1387,7 @@ Li(Lrun run, Larg a)
       return;		/* return empty buffer (or 0) on EOF	*/
     }
   LFATAL(!input->buf);
+  D("have=", FORMAT_I(input->buf->total), " pos=", FORMAT_I(input->pos), " out=", FORMAT_I(max));
 
   if (!max)
     ret.num	= Lnum_set_size(Lnum_new(_), input->buf->total - input->pos);	/* return number of bytes available	*/
@@ -1706,7 +1716,7 @@ L_parse(L _, Lbuf buf)
       pos++;
       if (start)
         {
-          if (match == c || (c>='0' && c<='9' && match==-1))
+          if (match && (match>0 ? match!=c : (c>='0' && c<='9')))
             {
               Ltmp_add_c(tmp, c);
               continue;
@@ -1736,6 +1746,7 @@ L_parse(L _, Lbuf buf)
         {
           start	= 1;
           match	= -1;
+	  Ltmp_add_c(tmp, c);
           continue;
         }
       else
@@ -1743,7 +1754,7 @@ L_parse(L _, Lbuf buf)
           {
           default:
           case '_':	continue;
-          case '"':	start=1; match=':'; continue;
+          case '"':	start=1; match='"'; continue;
           case '\'':	start=1; match='\''; continue;
           case '[':	start=1; match=']'; continue;
           case '+':	f = Ladd;	break;
@@ -1841,6 +1852,7 @@ main(int argc, char **argv)
 {
   L _;
 
+  D();
   _	= L_init(NULL, NULL);
   L_load(_, argv[1]);
   L_loop(_);
