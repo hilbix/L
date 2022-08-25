@@ -4,5 +4,6 @@ task:
         image: catalina-xcode
     - container:
         image: gcc:latest
-  script: make
+  compile-script: make
+  test-script: make test
 
