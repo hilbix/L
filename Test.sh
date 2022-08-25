@@ -13,3 +13,9 @@ rc 1
 egrep '_format' l.c | fgrep -v ', NULL)' | fgrep -v ', ...)'
 rc 1
 
+make
+rc 0
+
+./l -c '(_aA>A)' arg1 arg2
+rc 0
+
