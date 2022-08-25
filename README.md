@@ -1,6 +1,7 @@
-> This is not ready yet
+> This is not ready yet.
 
 [![L Build Status](https://api.cirrus-ci.com/github/hilbix/L.svg?branch=master)](https://cirrus-ci.com/github/hilbix/L/master)
+
 
 # L
 
@@ -20,10 +21,15 @@ It is extensible and easy to use.
 You can then run things:
 
 	./l file.l args.. <input >output
+	./l -c 'script' args.. <input >output
 
-Like a simple replacement of `/bin/cat`:
+Like "hello world":
 
-	./l <(echo '(_"r"${8192<xX>X}_)') files.. 
+	./l -c '"hello world">'
+
+Or a simple replacement of `/bin/cat`:
+
+	./l -c '(_"r"${8192<xX>X}_)' -- files..
 
 What does this do?
 
@@ -47,9 +53,10 @@ One thing is missing here:
 
 The change is easy, just call `r` only if there is something on the stack:
 
-	./l <(echo '(_"n"${"r"$}{8192<xX>X}_)')
+	./l -c'(_"n"${"r"$}{8192<xX>X}_)')
 
 The standard function `n` pushes the number of elements on the stack.
+
 
 ## Program
 
@@ -178,6 +185,7 @@ Main:
 - Currently the main loop is intrinsic
 - In future it should be a fast state machine
 - Such that you do not run your main loop from L
+
 
 ## FAQ
 
