@@ -300,9 +300,9 @@ bit_clr(unsigned char *bits, int bit)
 #define	FORMAT_I(I)	(char *)F_I, (long long)(I)
 #define	FORMAT_C(C)	(char *)F_C, (unsigned)(C)
 #define	FORMAT_c(C)	(char *)F_c, (unsigned)(C)
-#define	FORMAT_V(V)	(char *)F_V, V
-#define	FORMAT_X(X)	(char *)F_X, &(X), sizeof(X)
-#define	FORMAT_P(X)	(char *)F_X, (X), sizeof(*(X))
+#define	FORMAT_V(V)	(char *)F_V, (const void *)(V)
+#define	FORMAT_P(X)	(char *)F_X, (size_t)sizeof (X), (const void *)&(X)
+#define	FORMAT_X(X)	(char *)F_X, (size_t)sizeof (X), (const void *)(X)
 
 static void Loops(L, ...);
 #define	LFATAL(X,...)	do { if (X) Loops(NULL, "FATAL ERROR: ", __FILE__, " ", FORMAT_I(__LINE__), " ", __func__, ": ", #X, ##__VA_ARGS__, NULL); } while (0)
@@ -452,8 +452,8 @@ vFORMAT(Format *f, FormatArg *a)
             const void	*ptr;
             size_t	len;
 
-            ptr	= va_arg(a->l, const void *);
             len	= va_arg(a->l, size_t);
+            ptr	= va_arg(a->l, const void *);
             xFORMAT(f, ptr, len);
             continue;
           }
@@ -1722,7 +1722,7 @@ L_register(L _, const char *name, Lfun fn)
   Lreg		reg;
   struct Liter	iter;
 
-  DP(name, " ", FORMAT_P(fn));
+  DP(FORMAT_P(fn), " ", name);
   reg	= Lreg_find(_, Lbuf_iter(Lbuf_add_str(Lbuf_dec(Lbuf_new(_)), name), &iter), 1);
 
   LFATAL(!reg || !reg->part);	/* ->part can be the empty string but must not be NULL!	*/
@@ -2787,21 +2787,35 @@ Largcargv(L _, int argc, char **argv)
   i	= 1;
   for (int opt=0; i<argc && argv[i][0]=='-'; )	/* programs must not start with `-`	*/
     {
+      char		c;
+      const char	*arg;
+
       DP("arg", FORMAT_I(i), " ", argv[i]);
-      switch (argv[i][++opt])
+      switch (c = argv[i][++opt])
         {
+        default: Loops(_, "option not understood: ", argv[i], " problem at ", argv[i]+opt, NULL); break;
         case 0:
           LFATAL(opt==1, ": reading program from stdin not yet supported");
           i++;
           opt=0;
           continue;
-
         case 'c': cflag=1; continue;
+
+        case 'f':
+          break;	/* options with argument fallthrough	*/
         }
-      switch (argv[i][opt])
+      arg	= &argv[i][opt+1];
+      i++;
+      opt=0;
+      if (!*arg)
         {
-        default:
-          Loops(_, "option not understood: ", argv[i], " problem at ", argv[i]+opt, NULL);
+          LFATAL(i>=argc, ": missing argument for option ", FORMAT_c(c));
+          arg	= argv[i++];
+        }
+      switch (c)
+        {
+        default: Loops(_, "internal error, forgot to implement option ", FORMAT_c(c), NULL); break;
+        case 'f': L_load_file(_, arg);	break;
         }
     }
 
