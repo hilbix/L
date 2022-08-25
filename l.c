@@ -35,8 +35,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#if	0
-#define	DP(...)	do { L_stderr(NULL, "[[", __FILE__, ":", FORMAT_I(__LINE__), " ", __func__, "]", ##__VA_ARGS__, "]\n", NULL); } while (0)
+#if	1
+#define	DP(...)	do { if (Ldebug) L_stderr(NULL, "[[", __FILE__, ":", FORMAT_I(__LINE__), " ", __func__, "]", ##__VA_ARGS__, "]\n", NULL); } while (0)
 #else
 #define	DP	xDP
 #endif
@@ -46,6 +46,8 @@
 /* Structures ********************************************************/
 /* Structures ********************************************************/
 /* Structures ********************************************************/
+
+static const char	*Ldebug;
 
 typedef struct L	*L;
 
@@ -512,7 +514,7 @@ Loops(L _, ...)
   if (e)
     L_stderr(_, ": ", strerror(errno), NULL);
   L_stderr(_, "\n", NULL);
-  if (getenv("DEBUG_DUMP_CORE"))
+  if (Ldebug && !strcmp(Ldebug, "CORE_DUMP"))
     abort();
   exit(23);
   abort();
@@ -966,7 +968,7 @@ Lptr_inc(Lptr ptr)
 {
   L	_ = ptr->_;
 
-  xDP(FORMAT_X(ptr), FORMAT_V(ptr));
+  xDP(FORMAT_P(ptr), FORMAT_V(ptr));
   if (ptr->overuse)
     return ptr;
   if (!ptr->use)
@@ -1720,6 +1722,7 @@ L_register(L _, const char *name, Lfun fn)
   Lreg		reg;
   struct Liter	iter;
 
+  DP(name, " ", FORMAT_P(fn));
   reg	= Lreg_find(_, Lbuf_iter(Lbuf_add_str(Lbuf_dec(Lbuf_new(_)), name), &iter), 1);
 
   LFATAL(!reg || !reg->part);	/* ->part can be the empty string but must not be NULL!	*/
@@ -1920,7 +1923,7 @@ Lrun_add(Lrun _, Lfn fn, union Larg arg)
 {
   struct Lstep	*step;
 
-  xDP(FORMAT_X(fn), FORMAT_X(arg));
+  xDP(FORMAT_P(fn), FORMAT_P(arg));
   if (_->pos >= _->cnt)
     _->steps	= Lrealloc(_->ptr._, _->steps, (_->cnt += 1024) * sizeof *_->steps);
   step		= &_->steps[_->pos++];
@@ -2399,7 +2402,7 @@ Lbuf_load(Lbuf _, const char *s)
   int	fd;
 
   if ((fd=open(s, O_RDONLY))<0)
-    Loops(_->ptr._, "cannot load file", s, NULL);
+    Loops(_->ptr._, "cannot load file ", s, NULL);
   Lbuf_add_readall(_, fd);
   close(fd);
   return _;
@@ -2666,7 +2669,7 @@ L_step(L _)
     {
       LCOUNT(collect);
 
-      DP("free", FORMAT_X(_->free));
+      DP("free", FORMAT_P(_->free));
       L_ptr_free(&_->free->ptr);
     }
 
@@ -2686,7 +2689,7 @@ L_step(L _)
           continue;
         }
       step	= &run->steps[run->pos];
-      xDP(FORMAT_I(run->pos), FORMAT_X(step->fn), FORMAT_X(step->arg));
+      xDP(FORMAT_I(run->pos), FORMAT_P(step->fn), FORMAT_P(step->arg));
       run->pos++;
       step->fn(run, step->arg);
       last	= &(*last)->next;
@@ -2728,11 +2731,12 @@ _L_reg_dump(L _, Format *f, Lreg reg, const char *prefix)
   struct Lregister	*r;
 
   if (!reg)
-    return FORMAT(f, prefix, ": (none)\n", NULL);
+    return FORMAT(f, "regdump: '", prefix, "' (none)\n", NULL);
 
   LFATAL(!reg->part);
   part	= Lstr_format(_, prefix, reg->part, NULL);
 
+  FORMAT(f, "regdump: '", part, "'", NULL);
   if (reg->fn)
     {
       r	= _Lreg_search(reg->fn);
@@ -2779,15 +2783,15 @@ Largcargv(L _, int argc, char **argv)
   int	i;
   int	cflag;
 
-  i	= 0;
   cflag	= 0;
-  for (int opt=0; i<=argc && argv[i][0]=='-'; )	/* programs must not start with `-`	*/
+  i	= 1;
+  for (int opt=0; i<argc && argv[i][0]=='-'; )	/* programs must not start with `-`	*/
     {
+      DP("arg", FORMAT_I(i), " ", argv[i]);
       switch (argv[i][++opt])
         {
         case 0:
-          if (opt==1)
-            Loops(_, ": reading program from stdin not yet supported", NULL);
+          LFATAL(opt==1, ": reading program from stdin not yet supported");
           i++;
           opt=0;
           continue;
@@ -2797,24 +2801,24 @@ Largcargv(L _, int argc, char **argv)
       switch (argv[i][opt])
         {
         default:
-          Loops(_, ": option not understood: ", argv[i], " problem at ", argv[i]+opt, NULL);
+          Loops(_, "option not understood: ", argv[i], " problem at ", argv[i]+opt, NULL);
         }
     }
 
   if (cflag)
     {
-      LFATAL(i<argc, ": option -c requires an argument");
+      LFATAL(i>=argc, ": option -c requires an argument");
       L_load_str(_, argv[i++]);
     }
   else if (!_->run)
     {
-      LFATAL(i<argc, ": missing file argument (interactive mode not implemented)");
+      LFATAL(i>=argc, ": missing file argument (interactive mode not implemented)");
       L_load_file(_, argv[i++]);
     }
 
   /* push remaining args to stack	*/
-  while (i <= argc)
-    Lbuf_add_str(Lbuf_push_new(_), argv[argc--]);
+  while (i < argc)
+    Lbuf_add_str(Lbuf_push_new(_), argv[--argc]);
 
   return _;
 }
@@ -2824,9 +2828,13 @@ main(int argc, char **argv)
 {
   L	_;
 
+  Ldebug	= getenv("DEBUG");
   DP();
-  _	= L_init(NULL, NULL);
+
+  _		= L_init(NULL, NULL);
+
   L_register_all(_, Lfuncs);
+
   Largcargv(_, argc, argv);
 
   dump(_);
