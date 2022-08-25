@@ -12,7 +12,7 @@ INSTALL_PREFIX=/usr/local
 SRCS=$(wildcard *.c)
 BINS=$(SRCS:.c=)
 SETS=$(shell sed -n 's/^[	 /]*\*[*	 ]*LIBS:[	 ]*//p' $(SRCS))
-CFLAGS=-Wall -O3 -g $(shell bash -xc 'pkg-config --cflags $(SETS)') $(shell sed -n 's/^[	 /]*\*[*	 ]*GCCFLAGS:[	 ]*//p' $(SRCS))
+CFLAGS=-Wall -O0 -g $(shell bash -xc 'pkg-config --cflags $(SETS)') $(shell sed -n 's/^[	 /]*\*[*	 ]*GCCFLAGS:[	 ]*//p' $(SRCS))
 LDLIBS=$(shell bash -xc 'pkg-config --libs $(SETS)')
 
 TMPDIR := .tmp
@@ -47,7 +47,7 @@ test:	all
 
 .PHONY:	debug
 debug:	all
-	/usr/bin/gdb -q -nx -nw -ex r --args '$(BINS)' -- $(DEBUG_ARGS)
+	DEBUG_DUMP_CORE=: /usr/bin/gdb -q -nx -nw -ex r --args '$(BINS)' -- $(DEBUG_ARGS)
 
 # Following is quite wrong, as it recompiles all *.o,
 # not only the one for the individual target,
