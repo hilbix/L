@@ -5,6 +5,7 @@ rc()
   local e=$?
   [ "$e" = "$1" ] && return
   printf '\nExpected %s but got %s: to see error rerun as\n\tbash -x %q\n' "$1" "$e" "$0"
+  exit 1
 }
 
 # Check coding for forgotten NULLs on FORMAT and Loops
