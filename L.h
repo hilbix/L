@@ -393,7 +393,8 @@ write_all(int fd, const void *s, size_t len)
 static void
 writer(Format *f, const void *s, size_t len)
 {
-  write_all(f->fd, s, len);
+  if (s)
+    write_all(f->fd, s, len);
 }
 
 static void
@@ -472,6 +473,7 @@ vFORMAT(Format *f, FormatArg *a)
 }
 
 #define	FORMAT_INIT(F,OUT,FD,U)	do { F.out = OUT; F.fd = FD; F.user = U; } while (0)
+#define	FORMAT_FLUSH(F)		do { F.out(&F, NULL, (size_t)0); } while (0)
 #define	FORMAT_START(A,S)	do { va_start(A.l, S); } while (0)
 #define	FORMAT_END(A)		do { va_end(A.l); } while (0)
 
@@ -867,12 +869,14 @@ Lmem_new(L _, size_t len)
 static Lmem
 Lmem_resize(L _, Lmem mem, size_t len)
 {
-  LFATAL(mem->LmemNx || mem->LmemPr);
+  LFATAL(mem->LmemNx);
   if (len != mem->len)
     {
       mem		= Lrealloc(_, mem, (len+1)+sizeof *mem);
       mem->len		= len;
       mem->data[len]	= 0;
+      if (mem->LmemPr)
+        *mem->LmemPr	= mem;
     }
   return mem;
 }
@@ -1351,6 +1355,7 @@ Lbuf_add_format(Lbuf _, ...)
   FORMAT_START(a, _);
   vFORMAT(&f, &a);
   FORMAT_END(a);
+  FORMAT_FLUSH(f);
   return _;
 }
 
@@ -2537,7 +2542,88 @@ Lrun_loop1(Lrun run, Larg a)
 }
 #endif
 
-static void ___here___(void) { 000; }	/* Add mode Lfn here	*/
+static Lbuf
+Larg_buf(Lval v)
+{
+  LFATAL(v->ptr.type != LBUF, ": string or buffer required but got ", FORMAT_V(v));
+  return &v->buf;
+}
+
+static long long
+Larg_num(Lval v)
+{
+  LFATAL(v->ptr.type != LNUM, ": number required but got ", FORMAT_V(v));
+  return v->num.num;
+}
+
+/* XXX TODO XXX Re-implement this in L as soon as L is suitable for it
+ *
+ * pos buf pos width "xd" $
+ */
+static void
+Lxd(Lrun run, Larg a)
+{
+  L		_ = run->ptr._;
+  struct Liter	i1, i2;
+  size_t	len;
+  long long	pos, width;
+  Lbuf		buf;
+  char		tmp[100];
+  Format	f;
+
+  width	= Larg_num(Lpop_dec(_));
+  pos	= Larg_num(Lpop_dec(_));
+  buf	= Larg_buf(Lpop_dec(_));
+
+  FORMAT_INIT(f, Lbuf_writer, 0, Lbuf_push_new(_));
+  len	= buf->total;
+  Lnum_push_new(_)->num	= len;
+
+  /* from here L could work asynchronously, .. but we cannot support that from C	*/
+
+  Lbuf_iter(buf, &i1);
+  Lbuf_iter(buf, &i2);
+  while (len)
+    {
+      int	max, i;
+
+      max	= len;
+      if (max>width)
+        max	= width;
+
+      snprintf(tmp, sizeof tmp, "%08llx", pos);
+      sFORMAT(&f, tmp);
+
+      for (i=0; i<max; i++)
+        {
+          int	c;
+
+          c	= Liter_getc(&i1);
+          FORMAT(&f, " ", FORMAT_c(hex_nibble(c>>4)), FORMAT_c(hex_nibble(c)), NULL);
+        }
+      while (++i<=width)
+        sFORMAT(&f, "   ");
+      sFORMAT(&f, " ! ");
+
+      for (i=0; i<max; i++)
+        {
+          int	c;
+
+          c	= Liter_getc(&i2);
+          cFORMAT(&f, isprint(c) ? c : '.');
+        }
+      while (++i<=width)
+        cFORMAT(&f, ' ');
+      sFORMAT(&f, " !\n");
+
+      pos	+= max;
+      len	-= max;
+    }
+  FORMAT_FLUSH(f);
+}
+
+
+static void ___here___(void) { 000; }	/* Add more Lfn here	*/
 
 
 
@@ -2615,6 +2701,7 @@ Lstat(Lrun run, Larg name)
 
   FORMAT_INIT(f, Lbuf_writer, 0, Lbuf_push_new(_));
   Lstat_out(_, &f);
+  FORMAT_FLUSH(f);
 }
 
 #if 0
@@ -2940,11 +3027,12 @@ static struct Lregister Lfns[] =
     LR0(w,		"pop name, push file opened for create.  fail on exists.   num: use fd for write"),
     LR0(W,		"pop name, push file opened for append.  fail on missing.  num: use fd for write"),
     LR1(o),	'>',	"pop tos, write tos to output.  Terminate on error"),
-    LR0(I,		"pop fd, set output to fd (default 1)"),
+    LR0(O,		"pop fd, set output to fd (default 1)"),
     LR1(e),	'^',	"pop tos, write tos to err.  Terminate on error"),
     LR0(E,		"pop fd, set err to fd (default 2)"),
     LR0(l,		"pop A. num: pop B, push current program from instruction A for addition B instructions.  A=0 first, B=-1 all"),
 #endif
+    LR0(xd,		"hexdump buffer"),
     {0}
   };
 
