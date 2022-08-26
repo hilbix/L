@@ -1201,12 +1201,11 @@ Lpop_dec(L _)
  * This is only allowed on unused buffers
  */
 static Lmem
-Lbuf_mem_get(Lbuf buf)
+Lbuf_mem_get_mutable(Lbuf buf)
 {
   Lmem	mem;
 
   LFATAL(!buf);
-  LFATAL(buf->ptr.use);
   LFATAL(!buf->first);
 
   xDP(FORMAT_P(buf));
@@ -1221,6 +1220,14 @@ Lbuf_mem_get(Lbuf buf)
       buf->last	= 0;
     }
   return mem;
+}
+
+static Lmem
+Lbuf_mem_get(Lbuf buf)
+{
+  LFATAL(!buf);
+  LFATAL(buf->ptr.use);
+  return Lbuf_mem_get_mutable(buf);
 }
 
 static void
@@ -1977,7 +1984,9 @@ Lio_get_buf(Lio io, size_t max)
   io->pos	+= max;
   if (io->pos >= mem->len)
     {
-      L_mem_free(_, Lbuf_mem_get(io->buf));
+      DP("ding");
+      L_mem_free(_, Lbuf_mem_get_mutable(io->buf));	/* IO buffers must be used, else they would be freed	*/
+      DP("dong");
       io->pos	= 0;
     }
   return buf;
