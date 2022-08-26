@@ -1,4 +1,11 @@
-> This is not ready yet.
+> This is currently terribly incomplete.
+>
+> For example most functions (like "r" noted below) are not yet implemented.
+>
+> However, some of the basic [`example`](example/)s already work.
+>
+> Also see issues.
+
 
 [![L Build Status](https://api.cirrus-ci.com/github/hilbix/L.svg?branch=master)](https://cirrus-ci.com/github/hilbix/L/master)
 
@@ -7,56 +14,107 @@
 
 Embedded Language (hence the letter `L` pronounced `el` like Embedded Language)
 
-This is a minimalistic embedded language to process data streams.
+This is a minimalistic embedded language to process data streams (read: filter stdin to stdout).
 
-It is extensible and easy to use.
+Main Design Goals:
+
+- Easy to use
+- Easy to embed
+- Easy to extend
+- Easy to change
+
+Additional Design Goals:
+
+- KISS
+- Keep together what belongs together
+  - This especially means braces in C
+  - They are either on the same line
+  - Or on the same column
+- Perfectism reached when you can no more remove anything
+
+Unimportant Design Goals:
+
+- Maximum performance
+- Small scripts
+- Expressive scripts
+
+Design Goals Antipatterns (will never be implemented in L):
+
+- Code Polishing
+- Shiny Code
+- Bloat
+- Cathedral
+- Bazaar
+- Tabstops other than 8
+- Imposed Perfectism
+- Code of Conduct
+- Political Correctness
+- Getting Commercial 
+- Patents
+- Copyright
+- Nazis
 
 
 ## Usage
 
-	git clone https://github.com/hilbix/l.git
-	cd l
+	git clone https://github.com/hilbix/L.git
+	cd L
 	make
 
 You can then run things:
 
-	./l file.l args.. <input >output
-	./l -c 'script' args.. <input >output
+	./L file.l args.. <input >output
+	./L -c 'script' args.. <input >output
 
 Like "hello world":
 
-	./l -c '"hello world">'
+	./L -c '"hello world">'
 
 Or a simple replacement of `/bin/cat`:
 
-	./l -c '( @{"r"$} {(8192<xX>X)} @)' -- files..
+	./L -c '(@ {"r"$x} (8192<xX>X) @)' -- files..
 
 What does this do?
 
 - The program starts with all arguments on stack (first is TOS)
 - `(` until `@)` loops as long as there are arguments on the stack
   - If there are no arguments
-- `A"r"$` calls function `r` with the argument, thus opening the file for read.
+- `@` pushes the stack size (which here is the number of arguments) to the stack
+- `{` starts a conditional, which only runs if `@` did not return 0
+- `"r"$` calls function `r` with the argument
+  - This function opens the given file (top of stack) as input.
   - This assumes you use the standard library, where "r" is mapped to `fopen(name, "r")`
   - This returns a file descriptor you can reuse later
-- `{` to `}` then loops over this file
+- `x` pops the returned file descriptor from stack
+  - we do not need this
+  - (as the file is still connected to input, it is not closed)
+- `}` ends the conditional
+- `(` to `)` then loops over the input
 - `8192<` reads in up to 8192 bytes
   - It returns an empty buffer on EOF or error
 - `x` stores the buffer into variable X
 - `X>` outputs the buffer
 - `X` puts the buffer on stack, such that the loop continues if there was data
 
-One thing is missing here:
+More Examples see folder [`example/`](example/).
 
-- With no arguments we want to copy STDIN to STDOUT
-- Here function `r` fails as this expects something on the stack
-- The way to go is to not to call `r` if there is no argument on stack
 
-The change is easy, just call `r` only if there is something on the stack:
+## Options
 
-	./l -c '(_"n"${"r"$}{8192<xX>X}_)'
+- `-c` runs a script given on commandline
+  - The first non-option becomes the script
+  - The rest become the args to the script
+  - This is the same behavior as in shells
+  - If given multiply this does not change anything
 
-The standard function `n` pushes the number of elements on the stack.
+- `-f file` reads a file
+  - The file must be given as the next argument
+  - This can be given multiply
+  - The programs then run interleavingly
+  - Running more than one program currently has bugs, see TODO section below!
+
+- `--` ends the options
+  - Not yet implemented
 
 
 ## Program
@@ -90,15 +148,17 @@ And everything works with a stack.
   - If TOS is a number the number is written to STDOUT
   - If TOS is a buffer the buffer is written to STDOUT
 
-- `(_)` loops over `_` as long as the TOS at the end of the loop is not nullish
+- `(_)` loops over `_`
   - The first loop always is taken
+  - At the end of the loop the TOS is examined
+  - If it is not nullish, the loop is run again
   - The TOS is popped if the stack is nonempty
 
 - `{_}` is the conditional:
   - The TOS is examined to be not nullish
-  - If stack is nonempty the TOS is popped
-  - `if (X) { _ }` is implemented with `X{_}`
-  - `if (X) { _ } else { _ }` is implemented with something like `XzZ{_}Z!{_}`
+  - The TOS is popped if the stack is nonempty
+  - `if (X) { _ }` (in C or Java) can be written like `X{_}`
+  - `if (X) { _ } else { _ }` (in C or Java) can be written like `XzZ{_}Z!{_}`
     (where `z` is a helper variable to cache the conditional)
 
 - `+` adds the two top elements on the stack
@@ -153,17 +213,23 @@ And everything works with a stack.
 Notes:
 
 - "nullish" means
-  - The stack is not empty
-  - If the TOS is a number, it must not be `0`
-  - If the TOS is a buffer, it must be nonempty
-  - For other data types this is data type dependent
+  - The stack is empty, or
+  - If the TOS is a number, it is exactly `0`, or
+  - If the TOS is a buffer, it is empty
+  - Other data types currently fail when testing for nullish
 
 
 ## Functions
 
+> Functions are mostly not available yet
+
 Following functions are predefined (but this can be changed!):
 
-- `n` pushes the number of elements on the stack
+- `stat` pushes some informational counters to stack
+  - This might become a structure in future
+  - `stats` outputs those informational counters to STDERR
+  - So `"stats"$` is similar to `"stat"$>`, except that it prints to STDERR not to STDOUT
+  - `stats` might vanish as soon output to other FDs than 1 (STDOUT) is possible.
 
 - `r` open input from a file (according to `fopen(name, "r")`
   - If argument is a string, this is the filename to open
@@ -175,22 +241,36 @@ Following functions are predefined (but this can be changed!):
 
 Things which are not yet implemented correctly or where the design must be changed.
 
+Memory:
+
+- Currently memory is not freed correctly
+  - Hence `L` eats up all memory very fast
+
+Stack:
+
+- We only have one global stack
+- However we can run multiple programs in parallel
+- As all use the stack this is completly wrong
+- Hence currently option `-f` is unusable if used more than once
+- See also: Execution Environment
+
 Execution Environment:
 
 - There is currently only one scope for execution.  This is wrong.
   - We need multiple environments, such that we can sandbox things 
-  - This mainly means which `$` functions are available etc.
+- This mainly means which `$` functions are available etc.
+  - However also programs should have their own stack
 
 Code:
 
-- Many code parts are implemented in C
+- Many code parts are still implemented in C
   - In future, these should mainly be done in L
 
 Main:
 
-- Currently the main loop is intrinsic
-- In future it should be a fast state machine
-- Such that you do not run your main loop from L
+- Currently the main loop is blocking
+- In future it should become event driven
+- For example the read command blocks.
 
 
 ## FAQ
