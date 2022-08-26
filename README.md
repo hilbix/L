@@ -162,6 +162,8 @@ And everything works with a stack.
   - If TOS is a number the number is written to STDOUT
   - If TOS is a buffer the buffer is written to STDOUT
 
+- '^' same as `>` but for STDERR
+
 - `(_)` loops over `_`
   - The first loop always is taken
   - At the end of the loop the TOS is examined
