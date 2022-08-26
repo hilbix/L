@@ -2294,7 +2294,7 @@ Li(Lrun run, Larg a)
       if (!input->buf)
         input->buf	= Lbuf_new(_);
       DP("read", FORMAT_I(max));
-      if (!Lbuf_add_readn(input->buf, input->fd, max<BUFSIZ ? BUFSIZ : max))
+      if (!Lbuf_add_readn(input->buf, input->fd, max ? max : BUFSIZ))
         {
           DP("EOF");
           /* kick buffer on EOF	*/
