@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <ctype.h>
 
+#include <time.h>
 #include <unistd.h>
 #include <signal.h>
 
@@ -2700,6 +2701,24 @@ Lxd(Lrun run, Larg a)
   FORMAT_FLUSH(f);
 }
 
+static void
+Lms(Lrun run, Larg a)
+{
+  struct timespec rq, rm;
+  long long	num;
+
+  num		= Lval_num(Lpop_dec(run->ptr._));
+
+  rq.tv_sec	= num/1000;
+  rq.tv_nsec	= 1000000L*(num%1000);
+
+  /* perhaps better use clock_gettime, clock_nanosleep and TIMER_ABSTIME on CLOCK_MONOTONIC 	*/
+  while (nanosleep(&rq, &rm)<0)
+    {
+      LFATAL(errno != EINTR, "nanosleep() failed");
+      rq	= rm;
+    }
+}
 
 static void ___here___(void) { 000; }	/* Add more Lfn here	*/
 
@@ -3111,6 +3130,7 @@ static struct Lregister Lfns[] =
     LR0(l,		"pop A. num: pop B, push current program from instruction A for addition B instructions.  A=0 first, B=-1 all"),
 #endif
     LR0(xd,		"hexdump buffer"),
+    LR0(ms,		"wait some milliseconds"),
     {0}
   };
 
