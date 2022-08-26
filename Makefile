@@ -47,7 +47,7 @@ test:	all
 
 .PHONY:	debug
 debug:	all
-	DEBUG=CORE_DUMP /usr/bin/gdb -q -nx -nw -ex r --args '$(BINS)' $(DEBUG_ARGS)
+	DEBUG=: /usr/bin/gdb -q -nx -nw -ex r --args '$(BINS)' $(DEBUG_ARGS)
 
 # Following is quite wrong, as it recompiles all *.o,
 # not only the one for the individual target,
