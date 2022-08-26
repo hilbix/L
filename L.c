@@ -447,6 +447,7 @@ vFORMAT(Format *f, FormatArg *a)
         case F_A:	vFORMAT(f, va_arg(a->l, FormatArg *)); continue;
         case F_U:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%llu", va_arg(a->l, unsigned long long));	break;
         case F_I:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%lld", va_arg(a->l, long long));		break;
+        case F_c:	s=f->buf; u = va_arg(a->l, unsigned); f->buf[0]=u; f->buf[1]=0; if (isprint(u)) break;	/* fallthrough	*/
         case F_C:	s=f->buf; u = va_arg(a->l, unsigned); snprintf(f->buf, sizeof f->buf, "%c(%02x)", isprint(u) ? u : '?', u);			break;
         case F_V:	v=va_arg(a->l, Lval); s=v ? Ltypes[v->ptr.type] : "(null)";				break;
         case F_X:
@@ -573,7 +574,8 @@ Lalloc0(L _, size_t len)
 static L
 L_free(L _, void *ptr)
 {
-  free(ptr);
+  if (ptr)
+    free(ptr);
   return _;
 }
 
@@ -738,9 +740,9 @@ _Lmem_detach(Lmem mem)
   next		= mem->LmemNx;
   last		= mem->last;
   xDP(FORMAT_P(mem), FORMAT_P(last), FORMAT_P(next));
-  LFATAL(!last);
 
-  *last		= next;
+  if (last)
+    *last	= next;
   if (next)
     next->last	= last;
 
@@ -942,10 +944,12 @@ L_ptr_free(Lptr ptr)
 {
   L	_ = ptr->_;
 
-  *ptr->prev	= ptr->next;
+  LFATAL(!ptr);
+  if (ptr->prev)
+    *ptr->prev	= ptr->next;
   if (ptr->next)
     ptr->next->ptr.prev	= ptr->prev;
-  LFREE[ptr->type](_);
+  LFREE[ptr->type](ptr);
   L_free(_, ptr);
   return _;
 }
@@ -1206,7 +1210,9 @@ Lbuf_mem_get(Lbuf buf)
 {
   Lmem	mem;
 
-  LFATAL(!buf || buf->ptr.use || !buf->first);
+  LFATAL(!buf);
+  LFATAL(buf->ptr.use);
+  LFATAL(!buf->first);
 
   xDP(FORMAT_P(buf));
   mem	= _Lmem_detach_ptr(&buf->first);
@@ -1474,7 +1480,7 @@ Lstr_format(L _, ...)
   char		*ret;
 
   FORMAT_START(a, _);
-  buf	= Lbuf_add_format(Lbuf_new(_), FORMAT_A(a), NULL);
+  buf	= Lbuf_add_format(Lbuf_dec(Lbuf_new(_)), FORMAT_A(a), NULL);
   FORMAT_END(a);
 
   Lbuf_iter(buf, &i);
@@ -1599,6 +1605,9 @@ Lreg_find(L _, Liter name, int create)
               /* create new leaf	*/
               reg	= Lalloc0(_, sizeof *reg);
               reg->part	= Liter_strdup(name);
+              DP("new: '", reg->part, "'");
+
+              *last	= reg;
             }
           return reg;
         }
@@ -1618,6 +1627,7 @@ Lreg_find(L _, Liter name, int create)
           continue;
         }
 
+      DP(FORMAT_I(pos), "'", part, "'", FORMAT_C(c), FORMAT_C(cc));
       /* are we at the end of the name?	*/
       if (c<0)
         {
@@ -1641,6 +1651,8 @@ Lreg_find(L _, Liter name, int create)
 
           reg->part	= tmp;
           *last		= add;
+
+          DP("split", FORMAT_I(pos), add->part, FORMAT_C(cc), reg->part);
 
           pos		= 0;
           return add;
@@ -1670,7 +1682,9 @@ Lreg_find(L _, Liter name, int create)
             }
           else
             {
-              /* we are inside with an existing slot within sub-node range ->min <= c <= ->max	*/
+              /* we found an existing slot within sub-node range ->min <= c <= ->max
+               * The slot may be unused (NULL), though
+               */
               last	= &reg->sub[c-lo];
               continue;
             }
@@ -1681,7 +1695,9 @@ Lreg_find(L _, Liter name, int create)
           ext		= Lalloc0(_, (1+hi-lo)*sizeof *ext);
 
           tmp		= reg->sub;
-          memcpy(&ext[reg->min-lo], tmp, (1+reg->max-reg->min)*sizeof *ext);
+          DP(FORMAT_C(lo), ":", FORMAT_C(hi), FORMAT_P(tmp));
+          if (tmp)
+            memcpy(&ext[reg->min-lo], tmp, (1+reg->max-reg->min)*sizeof *ext);
 
           reg->min	= lo;
           reg->max	= hi;
@@ -1689,7 +1705,9 @@ Lreg_find(L _, Liter name, int create)
 
           L_free(_, tmp);
 
-          last		= &reg->sub[c];
+          DP("add", FORMAT_C(c), FORMAT_I(c-lo));
+
+          last		= &reg->sub[c-lo];
           pos		= 0;
           continue;
         }
@@ -1724,6 +1742,8 @@ Lreg_find(L _, Liter name, int create)
 
       L_free_const(_, part);
 
+      DP("split", FORMAT_C(cc), FORMAT_C(c));
+
       last		= &add->sub[c-lo];
       pos		= 0;
     }
@@ -1735,7 +1755,7 @@ L_register(L _, const char *name, Lfun fn)
   Lreg		reg;
   struct Liter	iter;
 
-  xDP(FORMAT_P(fn), " ", name);
+  DP(FORMAT_P(fn), " ", name);
   reg	= Lreg_find(_, Lbuf_iter(Lbuf_add_str(Lbuf_dec(Lbuf_new(_)), name), &iter), 1);
 
   LFATAL(!reg || !reg->part);	/* ->part can be the empty string but must not be NULL!	*/
@@ -2253,11 +2273,12 @@ Lfunc(Lrun run, Larg a)
   v	= Lpop_dec(_);
   if (!v)
     return;
+
   Lbuf_iter(&v->buf, &i);
-
   reg	= Lreg_find(run->ptr._, &i, 0);
-  LFATAL(!reg, ": $ function unknown: ", Lmem_tmp_str(_, Lmem_from_val(v)), NULL);
+  LFATAL(!reg || !reg->fn, ": $ function unknown: ", Lmem_tmp_str(_, Lmem_from_val(v)), NULL);
 
+  reg->fn(run, &v->buf);
 }
 
 static int
@@ -2496,6 +2517,7 @@ Lstat_out(L _, Format *f)
 {
   char	*sep;
 
+  DP();
   sep	= "";
   for (int i=0; i<sizeof Lcounts/sizeof *Lcounts; i++)
     {
@@ -2510,6 +2532,7 @@ Lstat(Lrun run, Lbuf name)
   L		_ = run->ptr._;
   Format	f;
 
+  DP();
   FORMAT_INIT(f, Lbuf_writer, 0, Lbuf_push_new(_));
   Lstat_out(_, &f);
 }
@@ -2522,6 +2545,7 @@ Lstats(Lrun run, Lbuf name)
 
   FORMAT_INIT(f, writer, 2, _);
   Lstat_out(_, &f);
+  sFORMAT(&f, "\n");
 }
 
 
@@ -2788,14 +2812,14 @@ _L_reg_dump(L _, Format *f, Lreg reg, const char *prefix)
   LFATAL(!reg->part);
   part	= Lstr_format(_, prefix, reg->part, NULL);
 
-  FORMAT(f, "regdump: '", part, "'", NULL);
+  FORMAT(f, "regdump: '", part, "': ", NULL);
   if (reg->fn)
     {
       r	= _Lreg_search(reg->fn);
       if (!r)
-        FORMAT(f, part, ": unknown function ", FORMAT_P(reg->fn), "\n", NULL);
+        FORMAT(f, "unknown function ", FORMAT_P(reg->fn), "\n", NULL);
       else
-        FORMAT(f, part, ": function ", r->name, "\n", NULL);
+        FORMAT(f, "function ", r->name, "\n", NULL);
     }
   if (reg->min || reg->max)
     {
