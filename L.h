@@ -1209,6 +1209,28 @@ Lpop_dec(L _)
 /* Lbuf **************************************************************/
 /* Lbuf **************************************************************/
 
+#if 1
+#define	VERIFY(...)	do {} while (0)
+#else
+#define	VERIFY(X,...)	do { _verify_##X##_(X, __LINE__, __func__, ##__VA_ARGS__, NULL); } while (0)
+#endif
+
+static void
+_verify_buf_(Lbuf buf, int line, const char *fn, ...)
+{
+  FormatArg	a;
+  long	cnt;
+  Lmem	mem;
+
+  cnt	= 0;
+  for (mem = buf->first; mem; mem=Lmem_next(mem))
+    cnt	+= mem->len;
+
+  FORMAT_START(a, fn);
+  LFATAL(cnt != buf->total, ": ", FORMAT_I(buf->total), " vs. ", FORMAT_I(cnt), " at ", FORMAT_I(line), " ", fn, FORMAT_A(a));
+  FORMAT_END(a);
+}
+
 /* extracts (removes) the first memory buffer from buf
  * This is only allowed on unused buffers
  */
@@ -1360,6 +1382,7 @@ Lbuf_writer(Format *f, const void *s, size_t len)
 
         if (!f->fd)
           {
+            VERIFY(buf);
             max	= BUFSIZ;
             if (max<len)
               max	= len;
@@ -1368,8 +1391,9 @@ Lbuf_writer(Format *f, const void *s, size_t len)
             f->fd	= 1;
             xDP(FORMAT_P(buf), FORMAT_P(mem), FORMAT_I(max));
           }
+
         mem	= buf->last;
-        max	= mem->len - f->fd + 1;
+        max	= mem->len - (f->fd - 1);
         if (max>len)
           max	= len;
 
@@ -1378,7 +1402,7 @@ Lbuf_writer(Format *f, const void *s, size_t len)
             f->fd	= 0;
             continue;
           }
-        memcpy(mem->data+f->fd-1, s, max);
+        memcpy(mem->data+(f->fd-1), s, max);
         len	-= max;
         s	+= max;
         f->fd	+= max;
@@ -1388,29 +1412,12 @@ Lbuf_writer(Format *f, const void *s, size_t len)
       xDP(FORMAT_P(buf), FORMAT_P(buf->last), FORMAT_I(f->fd-1));
       if (buf->last->len > f->fd-1)
         {
-          buf->total	-= buf->last->len - f->fd-1;
+          buf->total	-= buf->last->len - (f->fd-1);
           buf->last	= Lmem_resize(buf->ptr._, buf->last, f->fd-1);
         }
       f->fd	= 0;
+      VERIFY(buf);
     }
-}
-
-#if 0
-#define	VERIFY(X)	do {} while (0)
-#else
-#define	VERIFY(X)	do { _verify_##X##_(X); } while (0)
-#endif
-
-static void
-_verify_buf_(Lbuf buf)
-{
-  long	cnt;
-  Lmem	mem;
-
-  cnt	= 0;
-  for (mem = buf->first; mem; mem=Lmem_next(mem))
-    cnt	+= mem->len;
-  LFATAL(cnt != buf->total);
 }
 
 static Lbuf
@@ -1419,6 +1426,7 @@ Lbuf_add_format(Lbuf buf, ...)
   FormatArg	a;
   Format	f;
 
+  VERIFY(buf);
   FORMAT_INIT(f, Lbuf_writer, 0, buf);
   FORMAT_START(a, buf);
   vFORMAT(&f, &a);
