@@ -30,6 +30,7 @@
 #include <ctype.h>
 
 #include <unistd.h>
+#include <signal.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -215,9 +216,8 @@ union Lval
  */
 union Larg
   {
-    int			i;
     unsigned		c;
-    long long		l;
+    long long		i;
 
     Lval		val;
 
@@ -234,6 +234,7 @@ struct Lstack
   {
     Lstack		next;
     Larg		arg;
+    int			depth;
   };
 
 struct Lstep
@@ -301,8 +302,9 @@ bit_clr(unsigned char *bits, int bit)
 #define	FORMAT_C(C)	(char *)F_C, (unsigned)(C)
 #define	FORMAT_c(C)	(char *)F_c, (unsigned)(C)
 #define	FORMAT_V(V)	(char *)F_V, (const void *)(V)
-#define	FORMAT_P(X)	(char *)F_X, (size_t)sizeof (X), (const void *)&(X)
-#define	FORMAT_X(X)	(char *)F_X, (size_t)sizeof (X), (const void *)(X)
+#define	FORMAT_X(X)	(char *)F_X, (size_t)sizeof (X), (const void *)&(X)	/* hexdump	*/
+#define	FORMAT_D(X,S)	(char *)F_X, (size_t)(S), (const void *)(X)		/* hexdump area	*/
+#define	FORMAT_P(X)	(char *)F_X, (size_t)sizeof (X), (const void *)&(X)	/* pointer (currently wrong for LSB)	*/
 
 static void Loops(L, ...);
 #define	LFATAL(X,...)	do { if (X) Loops(NULL, "FATAL ERROR: ", __FILE__, " ", FORMAT_I(__LINE__), " ", __func__, ": ", #X, ##__VA_ARGS__, NULL); } while (0)
@@ -514,8 +516,13 @@ Loops(L _, ...)
   if (e)
     L_stderr(_, ": ", strerror(errno), NULL);
   L_stderr(_, "\n", NULL);
-  if (Ldebug && !strcmp(Ldebug, "CORE_DUMP"))
-    abort();
+  if (Ldebug)	/* for GDB	*/
+    {
+      if (strcmp(Ldebug, "CORE_DUMP"))
+        raise(SIGINT);
+      else
+       abort();
+    }
   exit(23);
   abort();
   for(;;);
@@ -730,6 +737,7 @@ _Lmem_detach(Lmem mem)
 
   next		= mem->LmemNx;
   last		= mem->last;
+  xDP(FORMAT_P(mem), FORMAT_P(last), FORMAT_P(next));
   LFATAL(!last);
 
   *last		= next;
@@ -751,7 +759,7 @@ _Lmem_detach_ptr(Lmem *ptr)
 static L
 L_mem_free(L _, Lmem mem)
 {
-  LFATAL(!mem);
+  xDP(FORMAT_P(mem));
   _Lmem_detach(mem);
   return L_free(_, mem);
 }
@@ -795,6 +803,8 @@ Lmem_attach(Lmem mem, Lmem *ptr)
   Lmem	next;
 
   LFATAL(!ptr || !mem || mem->LmemNx || mem->last);
+  xDP(FORMAT_P(mem), FORMAT_P(ptr), FORMAT_P(*ptr));
+
   next		= *ptr;
   mem->last	= ptr;
   mem->LmemNx	= next;
@@ -1053,6 +1063,7 @@ Lptr_push_stack_dec(Lptr v, Lstack *stack)
   s		= Lstack_new(v->_);
   s->arg.ptr	= v;
   s->next	= *stack;
+  s->depth	= s->next ? s->next->depth + 1 : 1;
   *stack	= s;
   return v;
 }
@@ -1181,6 +1192,7 @@ Lptr_push(Lptr _, Lstack *stack)
 static Lmem
 Lmem_add_to_buf(Lbuf _, Lmem mem)
 {
+  xDP(FORMAT_P(_), FORMAT_P(mem));
   _->last	= _->last ? Lmem_attach_to_mem(mem, _->last) : Lmem_attach(mem, &_->first);
   _->total	+= mem->len;
   return mem;
@@ -1196,6 +1208,7 @@ Lbuf_mem_get(Lbuf buf)
 
   LFATAL(!buf || buf->ptr.use || !buf->first);
 
+  xDP(FORMAT_P(buf));
   mem	= _Lmem_detach_ptr(&buf->first);
   LFATAL(!mem);
 
@@ -1722,7 +1735,7 @@ L_register(L _, const char *name, Lfun fn)
   Lreg		reg;
   struct Liter	iter;
 
-  DP(FORMAT_P(fn), " ", name);
+  xDP(FORMAT_P(fn), " ", name);
   reg	= Lreg_find(_, Lbuf_iter(Lbuf_add_str(Lbuf_dec(Lbuf_new(_)), name), &iter), 1);
 
   LFATAL(!reg || !reg->part);	/* ->part can be the empty string but must not be NULL!	*/
@@ -1756,6 +1769,8 @@ _Llist_free(Llist list)
 static Llist
 Llist_push(Llist list, const void *ptr, size_t len)
 {
+  xDP(FORMAT_V(list), FORMAT_P(ptr), FORMAT_I(len), FORMAT_D(ptr, len));
+
   Lmem_attach(Lmem_dup(list->ptr._, ptr, len), &list->first);
   list->num++;
   return list;
@@ -1767,8 +1782,11 @@ Llist_pop(Llist list, void *ptr, size_t len)
   L	_ = list->ptr._;
   Lmem	mem;
 
-  mem		= _Lmem_detach_ptr(&list->first);
+  mem		= list->first;
   LFATAL(!mem || mem->len != len);
+
+  xDP(FORMAT_V(list), FORMAT_P(ptr), FORMAT_I(len), FORMAT_D(mem->data, len));
+
   memcpy(ptr, mem->data, len);
   L_mem_free(_, mem);
   list->num--;
@@ -1991,7 +2009,7 @@ Ladd(Lrun run, Larg a)	/* a unused	*/
 
   v1	= Lpop_dec(_);
   v2	= Lpop_dec(_);
-  DP(FORMAT_V(v1), "+", FORMAT_V(v2));
+  xDP(FORMAT_V(v1), "+", FORMAT_V(v2));
   if (!v1)
     {
       Lbuf_push_new(_);
@@ -2343,13 +2361,29 @@ Lneg(Lrun run, Larg a)
   Lpush_dec(ret.val);
 }
 
+static void
+Lstack_cnt(Lrun run, Larg a)
+{
+  L		_ = run->ptr._;
+  Lstack	s;
+
+  s	= _->stack[0];
+  Lnum_push_new(_)->num	= s ? s->depth : 0;
+}
+
+/* This only examines the TOS, it does not pop it
+ */
 static int
 Lrun_tos_cond(Lrun run)
 {
-  L	_ = run->ptr._;
-  Larg	a1;
+  L		_ = run->ptr._;
+  Larg		a1;
+  Lstack	s;
 
-  a1.val	= Lpop_dec(_);
+  s		= _->stack[0];
+  if (!s)
+    return -1;
+  a1.val	= s->arg.val;
   if (a1.val)
     switch (a1.ptr->type)
       {
@@ -2360,32 +2394,45 @@ Lrun_tos_cond(Lrun run)
   return 0;
 }
 
-/* a.i: loop start
+static int
+Lrun_tos_cond_pop(Lrun run)
+{
+  int	cond;
+
+  cond	= Lrun_tos_cond(run);
+  if (cond>=0)
+    Lpop_dec(run->ptr._);
+  return cond;
+}
+
+/* a.i: loop start pos
  */
 static void
 Lrun_loop(Lrun run, Larg a)
 {
-  if (Lrun_tos_cond(run) == 1)
+  if (Lrun_tos_cond_pop(run) == 1)
     run->pos	= a.i;		/*  take the loop again	*/
 }
 
-/* a.i: Loop end
+/* a.i: conditional end pos (+1)
  */
 static void
-Lrun_loop0(Lrun run, Larg a)
+Lrun_cond(Lrun run, Larg a)
 {
-  if (Lrun_tos_cond(run) == 0)
-    run->pos	= a.i+1;	/* do not take the loop	*/
+  if (Lrun_tos_cond_pop(run) != 1)
+    run->pos	= a.i;		/* do not take the conditional	*/
 }
 
+#if 0
 /* a.i: Loop start
  */
 static void
 Lrun_loop1(Lrun run, Larg a)
 {
-  if (Lrun_tos_cond(run) == 1)
+  if (Lrun_tos_cond_pop(run) == 1)
     run->pos	= a.i+1;	/* take the loop again	*/
 }
+#endif
 
 static void ___here___(void) { 000; }	/* Add mode Lfn here	*/
 
@@ -2551,7 +2598,7 @@ L_parse(L _, Lbuf buf)
       union Larg	a;
       Lfn		f;
 
-      a.l	= -1;
+      a.i	= -1;
       pos++;
       if (match)
         {
@@ -2577,11 +2624,12 @@ L_parse(L _, Lbuf buf)
               a.buf	= Lbuf_add_tmp(Lbuf_new(_), tmp, Ltmp_proc_hex);
               break;
             case '\n':
-              /* this is a comment, just ignore	*/
+              a.ptr	= 0;	/* this is a comment, just ignore	*/
               break;
             }
           tmp->pos	= 0;
-          Lrun_add(run, Lpush_arg_inc, a);
+          if (a.ptr)
+            Lrun_add(run, Lpush_arg_inc, a);
 
           if (match>0)
             {
@@ -2620,9 +2668,7 @@ L_parse(L _, Lbuf buf)
           case '=':	f = Lcmp;	break;
           case '!':	f = Lnot;	break;
           case '~':	f = Lneg;	break;
-#if 0
-          case '@':	f = LstackCount;break;
-#endif
+          case '@':	f = Lstack_cnt;	break;
           case '(':
             data.c	= ')';
             data.fn	= Lrun_loop;
@@ -2631,10 +2677,10 @@ L_parse(L _, Lbuf buf)
             continue;
           case '{':
             data.c	= '}';
-            data.fn	= Lrun_loop1;
+            data.fn	= 0;
             data.pos	= run->pos;
             Llist_push(list, &data, sizeof data);
-            f	= Lrun_loop0;
+            f	= Lrun_cond;
             break;
           case ')':
           case '}':
@@ -2648,7 +2694,8 @@ L_parse(L _, Lbuf buf)
                 run->steps[a.i].arg.i	= run->pos;	/* set the break/continue position	*/
             break;
           }
-      Lrun_add(run, f, a);
+      if (f)
+        Lrun_add(run, f, a);
     }
 
   Lptr_dec(&tmp->ptr);
@@ -2769,6 +2816,43 @@ L_register_dump(L _, Format *f)
   return _;
 }
 
+static void
+_L_run_dump(L _, Format *f, Lrun run, const char *prefix)
+{
+  for (int i=0; i<run->cnt; i++)
+    {
+      struct Lstep	*step;
+
+      step	= run->steps+i;
+      FORMAT(f, prefix, ": ", FORMAT_I(i), " ", FORMAT_P(step->fn), " ", NULL);
+      if (step->arg.i == -1 || (step->arg.i>=0 && step->arg.i<=100000))	/* yuck! But it works	*/
+        {
+          FORMAT(f, "i: ", FORMAT_I(step->arg.i), "\n", NULL);
+          continue;
+        }
+      FORMAT(f, Ltypes[step->arg.ptr->type], ": ", NULL);
+      switch (step->arg.ptr->type)
+        {
+        default:	FORMAT(f, FORMAT_X(step->arg), "\n", NULL); continue;
+        case LNUM:	FORMAT(f, FORMAT_I(step->arg.num->num), "\n", NULL); continue;
+        }
+    }
+  L_free_const(_, prefix);
+}
+
+static L
+L_run_dump(L _, Format *f)
+{
+  for (Lstack s=_->run; s; s=s->next)
+    {
+      char	buf[200];
+
+      snprintf(buf, sizeof buf, "run %4d", s->depth);
+      _L_run_dump(_, f, s->arg.run, Lstrdup(_, buf));
+    }
+  return _;
+}
+
 
 static void
 dump(L	_)
@@ -2777,6 +2861,7 @@ dump(L	_)
 
   FORMAT_INIT(f, writer, 2, _);
   L_register_dump(_, &f);
+  L_run_dump(_, &f);
 }
 
 /* some very simple option processing
