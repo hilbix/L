@@ -1336,13 +1336,55 @@ Lbuf_add_readall(Lbuf _, int fd)
   return _;
 }
 
+/* Do not forget FORMAT_FLUSH at the end!	*/
 static void
 Lbuf_writer(Format *f, const void *s, size_t len)
 {
-  Lbuf	_ = f->user;
+  Lbuf	buf = f->user;
+  int	max;
 
-  LFATAL(_->ptr.type != LBUF);
-  Lbuf_add_ptr(_, s, len);
+  LFATAL(buf->ptr.type != LBUF);
+  xDP(FORMAT_P(buf), FORMAT_I(f->fd), FORMAT_P(s),FORMAT_I(len));
+  if (s)
+    while (len>0)
+      {
+        Lmem	mem;
+
+        if (!f->fd)
+          {
+            max	= BUFSIZ;
+            if (max<len)
+              max	= len;
+            mem	= Lbuf_mem_new(buf, max);
+            LFATAL(buf->last != mem);
+            f->fd	= 1;
+            xDP(FORMAT_P(buf), FORMAT_P(mem), FORMAT_I(max));
+          }
+        mem	= buf->last;
+        max	= mem->len - f->fd + 1;
+        if (max>len)
+          max	= len;
+
+        if (max<=0)
+          {
+            f->fd	= 0;
+            continue;
+          }
+        memcpy(mem->data+f->fd-1, s, max);
+        len	-= max;
+        s	+= max;
+        f->fd	+= max;
+      }
+  else if (f->fd)
+    {
+      xDP(FORMAT_P(buf), FORMAT_P(buf->last), FORMAT_I(f->fd-1));
+      if (buf->last->len < f->fd-1)
+        {
+	  buf->total	-= buf->last->len - f->fd-1;
+          buf->last	= Lmem_resize(buf->ptr._, buf->last, f->fd-1);
+	}
+      f->fd	= 0;
+    }
 }
 
 static Lbuf
