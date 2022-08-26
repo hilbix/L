@@ -99,6 +99,20 @@ What does this do?
 More Examples see folder [`example/`](example/).
 
 
+## Embedding
+
+> Embedding is in it's early stages
+
+The main goal for L is to be embeddable.
+In fact, it was constructed for exactly that purpose:
+
+- As a core for some closed source proprietary tools.
+
+However, things must first evolve here.
+
+For now just have a look into [`L.c`](L.c) how to wrap and include it into your own code.
+
+
 ## Options
 
 - `-c` runs a script given on commandline
