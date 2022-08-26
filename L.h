@@ -1102,6 +1102,12 @@ Lptr_push_stack_dec(Lptr v, Lstack *stack)
   return v;
 }
 
+static Lptr
+Lptr_push_stack_inc(Lptr ptr, int nr)
+{
+  return Lptr_push_stack_dec(ptr, &ptr->_->stack[nr]);
+}
+
 static Lval
 Lval_pop_stack_inc(L _, Lstack *stack)
 {
@@ -1622,6 +1628,14 @@ Lstr_opt(L _, const void *def)
 {
   return _->stack[0]->arg.ptr->type != LNUM ? Lstr_pop(_) : def;
 }
+
+static Lbuf
+Lbuf_push(Lbuf buf)
+{
+  Lptr_push_stack_inc(&buf->ptr, 0);
+  return buf;
+}
+
 
 
 /* Registry **********************************************************/
@@ -2789,6 +2803,12 @@ Lfloat(Lrun run, Larg a)
   Lnum_push_new(_)->num	= (long long)(ld * (long double)fact);
 }
 
+static void
+Lstr(Lrun run, Larg a)
+{
+  Lbuf_push(Lbuf_from_val_dec(Lpop_dec(run->ptr._)));
+}
+
 
 static void ___here___(void) { 000; }	/* Add more Lfn here	*/
 
@@ -3201,8 +3221,9 @@ static struct Lregister Lfns[] =
 #endif
     LR0(xd,		"hexdump buffer"),
     LR0(ms,		"wait some milliseconds"),
-    LR0(int,		"parse string to integer, optionally with base"),
-    LR0(float,		"parse float to integer, optionally with factor"),
+    LR0(int,		"parse string to number, optionally with base"),
+    LR0(float,		"parse float  to number, optionally with factor"),
+    LR0(str,		"convert TOS into string"),
     {0}
   };
 
