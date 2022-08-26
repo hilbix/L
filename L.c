@@ -31,7 +31,7 @@ main(int argc, char **argv)
   DP();
 
   _		= L_init(NULL, NULL);
-  L_register_all(_, Lfuncs);
+  L_register_all(_, Lfns);
   Largcargv(_, argc, argv);
 
   L_loop(_);
