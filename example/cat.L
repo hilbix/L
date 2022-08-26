@@ -5,7 +5,7 @@
 (@			# push number of arguments on stack
   {			# if there is an argument
     "r"$		# open the file for read
-    x			# throw away the return value (the file), as we do not need it
+    "I"$		# use opened file as input
   }			# the current stack value (argument) is popped here
   (			# now copy the data from input (file) to stdout
     8192<x		# read in a 8192 byte chunks into variable x
