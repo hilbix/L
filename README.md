@@ -53,7 +53,7 @@ One thing is missing here:
 
 The change is easy, just call `r` only if there is something on the stack:
 
-	./l -c'(_"n"${"r"$}{8192<xX>X}_)')
+	./l -c '(_"n"${"r"$}{8192<xX>X}_)'
 
 The standard function `n` pushes the number of elements on the stack.
 
@@ -67,10 +67,12 @@ And everything works with a stack.
 - Input is connected to STDIN, and Output is connected to STDOUT.
 - STDERR and other fildes are not connected anywhere.
 
+- `#` starts a comment until the end of line
+  - This way you can use shebang in scripts
+
 - `_` NOP, this command does nothing
-  - likewise any other control character
-  - note that this is the default
-  - for example, `SPC` can be an allias of `+` in CGI Web environments
+  - likewise any other control character or space
+  - note that `SPC` can be made an alias of `+` in CGI Web environments
 
 - `a` to `z` pop TOS and store into variable
 - `A` to `Z` push variable onto TOS
