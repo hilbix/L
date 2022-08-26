@@ -1378,11 +1378,11 @@ Lbuf_writer(Format *f, const void *s, size_t len)
   else if (f->fd)
     {
       xDP(FORMAT_P(buf), FORMAT_P(buf->last), FORMAT_I(f->fd-1));
-      if (buf->last->len < f->fd-1)
+      if (buf->last->len > f->fd-1)
         {
-	  buf->total	-= buf->last->len - f->fd-1;
+          buf->total	-= buf->last->len - f->fd-1;
           buf->last	= Lmem_resize(buf->ptr._, buf->last, f->fd-1);
-	}
+        }
       f->fd	= 0;
     }
 }
@@ -2585,14 +2585,14 @@ Lrun_loop1(Lrun run, Larg a)
 #endif
 
 static Lbuf
-Larg_buf(Lval v)
+Lval_buf(Lval v)
 {
   LFATAL(v->ptr.type != LBUF, ": string or buffer required but got ", FORMAT_V(v));
   return &v->buf;
 }
 
 static long long
-Larg_num(Lval v)
+Lval_num(Lval v)
 {
   LFATAL(v->ptr.type != LNUM, ": number required but got ", FORMAT_V(v));
   return v->num.num;
@@ -2612,10 +2612,40 @@ Lxd(Lrun run, Larg a)
   Lbuf		buf;
   char		tmp[100];
   Format	f;
+  Lval		v;
+  const char	*prefix, *suffix, *middle;
+  int		ascii;
 
-  width	= Larg_num(Lpop_dec(_));
-  pos	= Larg_num(Lpop_dec(_));
-  buf	= Larg_buf(Lpop_dec(_));
+  prefix	= "";
+  middle	= "  ! ";
+  suffix	= " !\n";
+  ascii		= 1;
+
+  v	= Lpop_dec(_);
+  if (v->ptr.type != LNUM)
+    {
+      prefix = Lstr_from_val(v);
+      v	= Lpop_dec(_);
+    }
+  if (v->ptr.type != LNUM)
+    {
+      suffix = Lstr_from_val(v);
+      v	= Lpop_dec(_);
+    }
+  if (v->ptr.type != LNUM)
+    {
+      middle = Lstr_from_val(v);
+      v	= Lpop_dec(_);
+    }
+  width	= Lval_num(v);
+  pos	= Lval_num(Lpop_dec(_));
+  v	= Lpop_dec(_);
+  if (v->ptr.type == LNUM)
+    {
+      ascii	= Lval_num(v);
+      v	= Lpop_dec(_);
+    }
+  buf	= Lval_buf(v);
 
   FORMAT_INIT(f, Lbuf_writer, 0, Lbuf_push_new(_));
   len	= buf->total;
@@ -2625,7 +2655,7 @@ Lxd(Lrun run, Larg a)
 
   Lbuf_iter(buf, &i1);
   Lbuf_iter(buf, &i2);
-  while (len)
+  for (; len; sFORMAT(&f, suffix))
     {
       int	max, i;
 
@@ -2633,8 +2663,12 @@ Lxd(Lrun run, Larg a)
       if (max>width)
         max	= width;
 
+      sFORMAT(&f, prefix);
       snprintf(tmp, sizeof tmp, "%08llx", pos);
       sFORMAT(&f, tmp);
+
+      pos	+= max;
+      len	-= max;
 
       for (i=0; i<max; i++)
         {
@@ -2643,23 +2677,25 @@ Lxd(Lrun run, Larg a)
           c	= Liter_getc(&i1);
           FORMAT(&f, " ", FORMAT_c(hex_nibble(c>>4)), FORMAT_c(hex_nibble(c)), NULL);
         }
+      if (!ascii)
+        continue;
+
       while (++i<=width)
         sFORMAT(&f, "   ");
-      sFORMAT(&f, " ! ");
+      sFORMAT(&f, middle);
 
       for (i=0; i<max; i++)
         {
           int	c;
 
           c	= Liter_getc(&i2);
-          cFORMAT(&f, isprint(c) ? c : '.');
+          if (!(ascii&2 ? (c>=' ' && c!=127) : isprint(c)))
+            c	= ascii&4 ? '.' : ' ';
+          cFORMAT(&f, c);
         }
-      while (++i<=width)
-        cFORMAT(&f, ' ');
-      sFORMAT(&f, " !\n");
-
-      pos	+= max;
-      len	-= max;
+      if (!(ascii&8))
+        while (++i<=width)
+          cFORMAT(&f, ' ');
     }
   FORMAT_FLUSH(f);
 }
