@@ -29,12 +29,13 @@ Like "hello world":
 
 Or a simple replacement of `/bin/cat`:
 
-	./l -c '(_"r"${8192<xX>X}_)' -- files..
+	./l -c '( @{"r"$} {(8192<xX>X)} @)' -- files..
 
 What does this do?
 
 - The program starts with all arguments on stack (first is TOS)
-- `(_` until `_)` loops over the arguments
+- `(` until `@)` loops as long as there are arguments on the stack
+  - If there are no arguments
 - `A"r"$` calls function `r` with the argument, thus opening the file for read.
   - This assumes you use the standard library, where "r" is mapped to `fopen(name, "r")`
   - This returns a file descriptor you can reuse later
@@ -68,11 +69,13 @@ And everything works with a stack.
 - STDERR and other fildes are not connected anywhere.
 
 - `#` starts a comment until the end of line
-  - This way you can use shebang in scripts
+  - This way you can use shebang in scripts etc.
 
-- `_` NOP, this command does nothing
-  - likewise any other control character or space
-  - note that `SPC` can be made an alias of `+` in CGI Web environments
+- Spaces and other control characters are NOPs
+  - NOPs do just nothing (are completely ignored)
+  - note that `SPC` can be an alias of `+` in CGI Web environments
+
+- `@` pushes the number of elements on the stack
 
 - `a` to `z` pop TOS and store into variable
 - `A` to `Z` push variable onto TOS
@@ -87,15 +90,16 @@ And everything works with a stack.
   - If TOS is a number the number is written to STDOUT
   - If TOS is a buffer the buffer is written to STDOUT
 
-- `(_)` loops over `_` as long as the TOS is not nullish
-  - The TOS is examined at the end of the loop so the first loop always is taken
-  - The TOS is only examined at the end of the loop, it is not popped!
+- `(_)` loops over `_` as long as the TOS at the end of the loop is not nullish
+  - The first loop always is taken
+  - The TOS is popped if the stack is nonempty
 
-- `{_}` is the same as `(_)` but:
-  - The TOS is examined at the beginning of the loop
-  - The TOS is popped
-  - `if (X) { _ }` is implemented with `X{_0}`
-  - `if (X) { _ } else { _ }` is implemented with `XzZZ{_0}!{_0}` (where `z` is a helper variable to do the "dup" on stack)
+- `{_}` is the conditional:
+  - The TOS is examined to be not nullish
+  - If stack is nonempty the TOS is popped
+  - `if (X) { _ }` is implemented with `X{_}`
+  - `if (X) { _ } else { _ }` is implemented with something like `XzZ{_}Z!{_}`
+    (where `z` is a helper variable to cache the conditional)
 
 - `+` adds the two top elements on the stack
   - `5_3+` gives `8`
