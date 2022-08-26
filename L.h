@@ -67,7 +67,6 @@ typedef struct Lregistry *Lreg;
 typedef union Larg	Larg;
 
 typedef void (		*Lfn)(Lrun, Larg);
-typedef void (		*Lfun)(Lrun, Lbuf name);
 
 enum Lwarns
   {
@@ -75,6 +74,7 @@ enum Lwarns
     LW_OVERUSE,
     LW_LARGESTACK,
     LW_EXTREMESTACK,
+    LW_r,		/* cannot open	*/
     LW_MAX_
   };
 
@@ -185,15 +185,21 @@ struct Ltmp	/* mutable extensible data buffer	*/
 struct Lregistry
   {
     const unsigned char	*part;
-    Lfun		fn;
+    Lfn			fn;
     Lreg		*sub;
     unsigned char	min, max;
   };
 
+#define	LR0(X,H)	{ #X, 0, 0, L##X, H }
+#define	LR1(X,C,H)	{ #X, C, 0, L##X, H }
+#define	LR2(X,C,D,H)	{ #X, C, D, L##X, H }
 struct Lregister
   {
-    char	*name;
-    Lfun	fn;
+    const char		*name;	/* name of function	*/
+    const unsigned	one;	/* unicode	*/
+    const unsigned	two;	/* unicode	*/
+    Lfn			fn;
+    const char		*help;
   };
 
 /* Value
@@ -924,20 +930,24 @@ Lmem_tmp(L _, Lmem mem)
   return mem;
 }
 
-/* quick and dirty make C-String out of mem	*/
-static const char *
+/* quick and dirty make C-String out of mem
+ * WARNING! This only is valid until the next L_step()
+ */
+static const void *
 Lmem_str(Lmem mem)
 {
 #if 1
   LFATAL(mem->data[mem->len], ": suspected BUG: buffer overrun");
 #else
-  mem->data[mem->len]	= 0;	/* redundant, but you cannot be sure	*/
+  mem->data[mem->len]	= 0;	/* redundant, but it does not hurt	*/
 #endif
   return mem->data;
 }
 
-/* quick and dirty return a copy if the C-string of a mem	*/
-static const char *
+/* quick and dirty return a tempoary copy of the C-string of a mem
+ * WARNING! This only is valid until the next L_step()
+ */
+static const void *
 Lmem_tmp_str(L _, Lmem mem)
 {
   return Lmem_str(Lmem_tmp(_, mem));
@@ -1183,25 +1193,6 @@ Lpop_dec(L _)
  * ONLY USE WITH NEWLY CREATED DATATYPES!
  */
 
-#if 0
-static void
-Lpush_arg_inc(L _, Larg a)
-{
-  Lpush_inc(a.val);
-}
-
-static void
-Lpush_arg_dec(L _, Larg a)
-{
-  Lpush_dec(a.val);
-}
-
-static Lptr
-Lptr_push(Lptr _, Lstack *stack)
-{
-  return _;
-}
-#endif
 
 /* Lbuf **************************************************************/
 /* Lbuf **************************************************************/
@@ -1301,7 +1292,11 @@ Lbuf_add_readn(Lbuf buf, int fd, int max)
   int	loops;
   Lmem	mem;
 
-  LFATAL(max<=0);
+  if (max<0)
+    max	= -max;
+  else if (!max)
+    max	= BUFSIZ;
+
   for (loops=0; loops<10000; loops++)
     {
       int got;
@@ -1310,9 +1305,9 @@ Lbuf_add_readn(Lbuf buf, int fd, int max)
       got	= read(fd, mem->data, (size_t)max);
       if (got>0)
         {
-	  LFATAL(got > mem->len);
+          LFATAL(got > mem->len);
           return Lbuf_add_mem(buf, Lmem_resize(_, mem, got));
-	}
+        }
       L_mem_free(_, mem);
       if (!got)
         return 0;
@@ -1436,17 +1431,18 @@ Liter_read(Liter _, void *_ptr, size_t len)
 }
 
 /* create an allocated string from the rest of the iter
+ * We must return void *, else compiler warns due to signedness ..
  */
 static void *
-Liter_strdup(Liter _)
+Liter_strdup(Liter iter)
 {
   char		*tmp;
   size_t	len;
 
-  len		= _->cnt;
-  tmp		= Lalloc(_->buf->ptr._, len+1);
+  len		= iter->cnt;
+  tmp		= Lalloc(iter->buf->ptr._, len+1);
   tmp[len]	= 0;
-  return Liter_read(_, tmp, len);
+  return Liter_read(iter, tmp, len);
 }
 
 
@@ -1467,6 +1463,9 @@ Lbuf_from_val_dec(Lval v)
   return 0;
 }
 
+/* Warning: Lval should not be access anymore afterwards
+ * WARNING! This mem is only valid until the next L_step()
+ */
 static Lmem
 Lmem_from_val(Lval v)
 {
@@ -1481,26 +1480,50 @@ Lmem_from_val(Lval v)
    * Free the unused buffer code
    * and just return it's mem without memory duplication
    * (zero copy)
+   *
+   * buf->ptr.use == 0, hence nobody is using it
+   * HOWEVER there might be still pointers using this here.
+   * So beware.  Just do not do this if using this routine.
    */
  mem	= Lbuf_mem_get(buf);
+ LFATAL(buf->first);
  L_ptr_free(&buf->ptr);
  return mem;
 }
 
-static const char *
+/* Warning: Lval should not be access anymore afterwards
+ * WARNING! The returned string is only valid until the next L_step()
+ */
+static const void *
+Lstr_from_val(Lval v)
+{
+  return Lmem_tmp_str(v->ptr._, Lmem_from_val(v));
+}
+
+/* Avoids multiple copies here if possible,
+ * this is why we use the iter()
+ */
+static const void *
+Lbuf_strdup(Lbuf buf)
+{
+  struct Liter iter;
+
+  Lbuf_iter(buf, &iter);
+  return Liter_strdup(&iter);
+}
+
+static const void *
 Lstr_format(L _, ...)
 {
   FormatArg	a;
   Lbuf		buf;
-  struct Liter	i;
-  char		*ret;
+  const void	*ret;
 
   FORMAT_START(a, _);
   buf	= Lbuf_add_format(Lbuf_dec(Lbuf_new(_)), FORMAT_A(a), NULL);
   FORMAT_END(a);
 
-  Lbuf_iter(buf, &i);
-  ret	= Liter_strdup(&i);
+  ret	= Lbuf_strdup(buf);
 
   L_ptr_free(&buf->ptr);
   return ret;
@@ -1766,7 +1789,7 @@ Lreg_find(L _, Liter name, int create)
 }
 
 static L
-L_register(L _, const char *name, Lfun fn)
+L_register(L _, const char *name, Lfn fn)
 {
   Lreg		reg;
   struct Liter	iter;
@@ -2007,6 +2030,14 @@ Lpush_arg_inc(Lrun _, Larg a)
 {
   Lpush_inc(a.val);
 }
+
+#if 0
+static void
+Lpush_arg_dec(L _, Larg a)
+{
+  Lpush_dec(a.val);
+}
+#endif
 
 static void
 Lpush_reg(Lrun run, Larg a)
@@ -2288,23 +2319,39 @@ Le(Lrun run, Larg a)
   Lout(run, run->ptr._->err);
 }
 
+/* 1$ is the toString function
+ */
 static void
 Lfunc(Lrun run, Larg a)
 {
   L		_ = run->ptr._;
   struct Liter	i;
-  Lval		v;
+  Larg		a1;
   Lreg		reg;
 
-  v	= Lpop_dec(_);
-  if (!v)
+  a1.val	= Lpop_dec(_);
+  if (!a1.val)
     return;
 
-  Lbuf_iter(&v->buf, &i);
-  reg	= Lreg_find(run->ptr._, &i, 0);
-  LFATAL(!reg || !reg->fn, ": $ function unknown: ", Lmem_tmp_str(_, Lmem_from_val(v)), NULL);
+  switch (a1.ptr->type)
+    {
+    default:
+      /* Try to convert it so a buffer	*/
+      /* Following two lines should be folded into one somehow.	*/
+      a1.buf	= Lbuf_from_val_dec(a1.val);
+      Lpush_inc(a1.val);
+      return;
 
-  reg->fn(run, &v->buf);
+    case LBUF:
+      break;
+    }
+
+  Lbuf_iter(a1.buf, &i);
+  reg	= Lreg_find(run->ptr._, &i, 0);
+  LFATAL(!reg || !reg->fn, ": $ function unknown: ", Lmem_tmp_str(_, Lmem_from_val(a1.val)), NULL);
+
+  DP(FORMAT_P(reg->fn));
+  reg->fn(run, a1);
 }
 
 static int
@@ -2387,7 +2434,7 @@ Lnot(Lrun run, Larg a)
   a1.val	= Lpop_dec(_);
   switch (a1.ptr->type)
     {
-    default:	return Lunknown(run, FORMAT_V(a1.val), " cannot apply function not to type ", FORMAT_V(a1.val), " (yet?)", NULL);
+    default:	return Lunknown(run, FORMAT_V(a1.val), " cannot apply function 'not' to type ", FORMAT_V(a1.val), " (yet?)", NULL);
     case LNUM:	ret.num	= Lnum_set_i(Lnum_new(_), !a1.num->num);	break;
     }
   Lpush_dec(ret.val);
@@ -2402,7 +2449,7 @@ Lneg(Lrun run, Larg a)
   a1.val	= Lpop_dec(_);
   switch (a1.ptr->type)
     {
-    default:	return Lunknown(run, FORMAT_V(a1.val), " cannot apply function not to type ", FORMAT_V(a1.val), " (yet?)", NULL);
+    default:	return Lunknown(run, FORMAT_V(a1.val), " cannot apply function 'neg' to type ", FORMAT_V(a1.val), " (yet?)", NULL);
     case LNUM:	ret.num	= Lnum_set_i(Lnum_new(_), ~a1.num->num);	break;
     }
   Lpush_dec(ret.val);
@@ -2492,7 +2539,6 @@ static void ___here___(void) { 000; }	/* Add mode Lfn here	*/
 static Lbuf
 Lbuf_load(Lbuf _, const char *s)
 {
-
   int	fd;
 
   if ((fd=open(s, O_RDONLY))<0)
@@ -2553,7 +2599,7 @@ Lstat_out(L _, Format *f)
 }
 
 static void
-Lstat(Lrun run, Lbuf name)
+Lstat(Lrun run, Larg name)
 {
   L		_ = run->ptr._;
   Format	f;
@@ -2562,8 +2608,9 @@ Lstat(Lrun run, Lbuf name)
   Lstat_out(_, &f);
 }
 
+#if 0
 static void
-Lstats(Lrun run, Lbuf name)
+Lstats(Lrun run, Larg name)
 {
   L		_ = run->ptr._;
   Format	f;
@@ -2572,7 +2619,62 @@ Lstats(Lrun run, Lbuf name)
   Lstat_out(_, &f);
   sFORMAT(&f, "\n");
 }
+#endif
 
+/* open file for read
+ * Return-type is wrong!  (For now)
+ * It must return Lio!
+ */
+static void
+Lr(Lrun run, Larg name)
+{
+  L		_ = run->ptr._;
+  const char	*s;
+  int		fd;
+
+  fd		= open(s = Lstr_from_val(Lpop_dec(_)), O_RDONLY);
+  LFATAL(!fd, "opened file descriptor was 0, how was this possible?");
+  if (fd<0)
+    {
+      L_warn(_, LW_r, s, ": cannot open for read: ", strerror(errno), NULL);
+      fd	= 0;
+    }
+  Lnum_push_new(_)->num	= fd;
+  DP(FORMAT_I(fd));
+}
+
+/* set input to FD
+ */
+static void
+LI(Lrun run, Larg name)
+{
+  L	_ = run->ptr._;
+  Larg	a1;
+  Lio	old;
+
+  a1.val	= Lpop_dec(_);
+  switch (a1.ptr->type)
+    {
+      long long fd;
+
+    default:	Lunknown(run, FORMAT_V(a1.val), " unsuitable ", FORMAT_V(a1.val), " condition for {_}", NULL); return;
+    case LNUM:
+      fd = a1.num->num;;
+      LFATAL(fd<0 || (long long)(int)fd!=fd, "file descriptor out of bounds");
+      a1.io	= Lio_new(_);
+      a1.io->fd	= fd;
+      break;
+    case LIO:
+      Linc(a1);
+      break;
+    }
+  old		= _->read;
+  _->read	= a1.io;
+  DP(FORMAT_I(a1.io->fd));
+
+  a1.io		= old;
+  Ldec(a1);
+}
 
 
 /* PARSING ***********************************************************/
@@ -2799,6 +2901,11 @@ L_step(L _)
   return _;
 }
 
+
+
+
+
+
 static L
 L_loop(L _)
 {
@@ -2807,20 +2914,47 @@ L_loop(L _)
   return _;
 }
 
-#define	LR(X)	{ #X, L##X }
-
-struct Lregister Lfuncs[] =
+/* Idea: `-` is `rev` with AB- gives rev(A)rev(B)+ and not rev(A+B)
+ * " hello " " world " - gives " olleh  dlrow
+ */
+static struct Lregister Lfns[] =
   {
-    LR(stat), LR(stats),
+    LR1(add,	'+',	"pop B, pop A, push A+B. str concatenates.  FUTURE: AstrBnum adds to each byte with rollover.  AnumBstr adds up all bytes"),
+    LR1(sub,	'-',	"pop B, pop A, push A-B.  FUTURE: str ?, AstrBnum ?, AnumBstr ?"),
+    LR1(mul,	'.',	"pop B, pop A, push A*B.  FUTURE: Astr indexes.  AnumBstr repeats str num times"),
+    LR1(div,	':',	"pop B, pop A, push C, push D, A=B*C+D. B=0 is C=0,D=A else 0<=D<abs(B).  AstrBnum ?.  AnumBstr ?"),
+    LR0(stat,		"push statistics.  WARNING: Format will change in future!"),
+    LR0(r,		"pop name, push file opened for read.    0 on fail.        num: use fd for read"),
+    LR1(i,	'<',	"pop count, read count bytes from input.  empty on EOF"),
+    LR0(I,		"pop fd, set input to fd (default 0)"),
+#if 0
+    LR0(w,		"pop name, push file opened for create.  fail on exists.   num: use fd for write"),
+    LR0(W,		"pop name, push file opened for append.  fail on missing.  num: use fd for write"),
+    LR1(o),	'>',	"pop tos, write tos to output.  Terminate on error"),
+    LR0(I,		"pop fd, set output to fd (default 1)"),
+    LR1(e),	'^',	"pop tos, write tos to err.  Terminate on error"),
+    LR0(E,		"pop fd, set err to fd (default 2)"),
+    LR0(l,		"pop A. num: pop B, push current program from instruction A for addition B instructions.  A=0 first, B=-1 all"),
+#endif
     {0}
   };
 
+
+
+
+
+
+
+/* XXX TODO XXX
+ * - should not use Lfns structure
+ * - should be improved with binsearch
+ */
 static struct Lregister *
-_Lreg_search(Lfun fn)
+_Lreg_search(Lfn fn)
 {
   struct Lregister *r;
 
-  for (r=Lfuncs; r->name; r++)
+  for (r=Lfns; r->name; r++)
     if (r->fn == fn)
       return r;
   return 0;
