@@ -2967,20 +2967,3 @@ Largcargv(L _, int argc, char **argv)
   return _;
 }
 
-int
-main(int argc, char **argv)
-{
-  L	_;
-
-  Ldebug	= getenv("DEBUG");
-  DP();
-
-  _		= L_init(NULL, NULL);
-  L_register_all(_, Lfuncs);
-  Largcargv(_, argc, argv);
-
-  L_loop(_);
-  DP(" end");
-  return Lexit(_);
-}
-
