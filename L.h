@@ -560,7 +560,7 @@ Lrealloc(L _, void *ptr, size_t len)
   void	*r;
 
   r	= ptr ? realloc(ptr, len) : malloc(len);
-  LFATAL(!r, "out of memory");
+  LFATAL(!r, ": out of memory");
   return r;
 }
 
@@ -1193,6 +1193,7 @@ Lpop_dec(L _)
   return Lval_pop_dec(_, 0);
 }
 
+
 /* Now the convenience functions for datatypes
  *
  * ONLY USE WITH NEWLY CREATED DATATYPES!
@@ -1584,6 +1585,43 @@ Lstr_format(L _, ...)
   return ret;
 }
 
+static Lbuf
+Lval_buf(Lval v)
+{
+  LFATAL(v->ptr.type != LBUF, ": string or buffer required but got ", FORMAT_V(v));
+  return &v->buf;
+}
+
+static long long
+Lval_num(Lval v)
+{
+  LFATAL(v->ptr.type != LNUM, ": number required but got ", FORMAT_V(v));
+  return v->num.num;
+}
+
+static long long
+Lnum_pop(L _)
+{
+  return Lval_num(Lpop_dec(_));
+}
+
+static long long
+Lnum_opt(L _, long long def)
+{
+  return _->stack[0]->arg.ptr->type == LNUM ? Lnum_pop(_) : def;
+}
+
+static const void *
+Lstr_pop(L _)
+{
+  return Lstr_from_val(Lpop_dec(_));
+}
+
+static const void *
+Lstr_opt(L _, const void *def)
+{
+  return _->stack[0]->arg.ptr->type != LNUM ? Lstr_pop(_) : def;
+}
 
 
 /* Registry **********************************************************/
@@ -2585,20 +2623,6 @@ Lrun_loop1(Lrun run, Larg a)
 }
 #endif
 
-static Lbuf
-Lval_buf(Lval v)
-{
-  LFATAL(v->ptr.type != LBUF, ": string or buffer required but got ", FORMAT_V(v));
-  return &v->buf;
-}
-
-static long long
-Lval_num(Lval v)
-{
-  LFATAL(v->ptr.type != LNUM, ": number required but got ", FORMAT_V(v));
-  return v->num.num;
-}
-
 /* XXX TODO XXX Re-implement this in L as soon as L is suitable for it
  *
  * pos buf pos width "xd" $
@@ -2701,6 +2725,7 @@ Lxd(Lrun run, Larg a)
   FORMAT_FLUSH(f);
 }
 
+/* wait for some milliseconds	*/
 static void
 Lms(Lrun run, Larg a)
 {
@@ -2715,10 +2740,55 @@ Lms(Lrun run, Larg a)
   /* perhaps better use clock_gettime, clock_nanosleep and TIMER_ABSTIME on CLOCK_MONOTONIC 	*/
   while (nanosleep(&rq, &rm)<0)
     {
-      LFATAL(errno != EINTR, "nanosleep() failed");
+      LFATAL(errno != EINTR, ": nanosleep() failed");
       rq	= rm;
     }
 }
+
+/* parse string into integer
+ * we should improve this in future
+ * and it should be done in L
+ */
+static void
+Lint(Lrun run, Larg a)
+{
+  L		_ = run->ptr._;
+  long long	base;
+  const char	*data;
+  long long	num;
+  char		*end;
+
+  base	= Lnum_opt(_, 10);
+  data	= Lstr_pop(_);
+
+  errno	= 0;
+  num	= strtoll(data, &end, base);
+  LFATAL(errno || !end || *end, ": cannot parse number ", data, " into integer: ", strerror(errno), ": ", end);
+  Lnum_push_new(_)->num	= num;
+}
+
+/* parse string into integer from float
+ * we should improve this in future
+ * and it should be done in L
+ */
+static void
+Lfloat(Lrun run, Larg a)
+{
+  L		_ = run->ptr._;
+  const char	*data;
+  long double	ld;
+  long long	fact;
+  char		*end;
+
+  fact	= Lnum_opt(_, 1);
+  data	= Lstr_pop(_);
+
+  errno	= 0;
+  ld	= strtold(data, &end);
+  LFATAL(errno || !end || *end, ": cannot parse number ", data, " into float: ", strerror(errno), " ", end);
+  Lnum_push_new(_)->num	= (long long)(ld * (long double)fact);
+}
+
 
 static void ___here___(void) { 000; }	/* Add more Lfn here	*/
 
@@ -2826,7 +2896,7 @@ Lr(Lrun run, Larg name)
   int		fd;
 
   fd		= open(s = Lstr_from_val(Lpop_dec(_)), O_RDONLY);
-  LFATAL(!fd, "opened file descriptor was 0, how was this possible?");
+  LFATAL(!fd, ": opened file descriptor became 0, how is this possible?");
   if (fd<0)
     {
       L_warn(_, LW_r, s, ": cannot open for read: ", strerror(errno), NULL);
@@ -2853,7 +2923,7 @@ LI(Lrun run, Larg name)
     default:	Lunknown(run, FORMAT_V(a1.val), " unsuitable ", FORMAT_V(a1.val), " condition for {_}", NULL); return;
     case LNUM:
       fd = a1.num->num;;
-      LFATAL(fd<0 || (long long)(int)fd!=fd, "file descriptor out of bounds");
+      LFATAL(fd<0 || (long long)(int)fd!=fd, ": file descriptor out of bounds");
       a1.io	= Lio_new(_);
       a1.io->fd	= fd;
       break;
@@ -3131,6 +3201,8 @@ static struct Lregister Lfns[] =
 #endif
     LR0(xd,		"hexdump buffer"),
     LR0(ms,		"wait some milliseconds"),
+    LR0(int,		"parse string to integer, optionally with base"),
+    LR0(float,		"parse float to integer, optionally with factor"),
     {0}
   };
 
