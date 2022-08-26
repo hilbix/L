@@ -1395,18 +1395,37 @@ Lbuf_writer(Format *f, const void *s, size_t len)
     }
 }
 
+#if 0
+#define	VERIFY(X)	do {} while (0)
+#else
+#define	VERIFY(X)	do { _verify_##X##_(X); } while (0)
+#endif
+
+static void
+_verify_buf_(Lbuf buf)
+{
+  long	cnt;
+  Lmem	mem;
+
+  cnt	= 0;
+  for (mem = buf->first; mem; mem=Lmem_next(mem))
+    cnt	+= mem->len;
+  LFATAL(cnt != buf->total);
+}
+
 static Lbuf
-Lbuf_add_format(Lbuf _, ...)
+Lbuf_add_format(Lbuf buf, ...)
 {
   FormatArg	a;
   Format	f;
 
-  FORMAT_INIT(f, Lbuf_writer, 0, _);
-  FORMAT_START(a, _);
+  FORMAT_INIT(f, Lbuf_writer, 0, buf);
+  FORMAT_START(a, buf);
   vFORMAT(&f, &a);
   FORMAT_END(a);
   FORMAT_FLUSH(f);
-  return _;
+  VERIFY(buf);
+  return buf;
 }
 
 static Lbuf
