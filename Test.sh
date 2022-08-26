@@ -17,6 +17,9 @@ rc 1
 make
 rc 0
 
-./l -c '(_aA>A)' arg1 arg2
+timeout 10 ./L -c '(>@)' arg1 arg2
+rc 0
+
+timeout 10 ./L -c '"r"$"I"$(1<xX>X)' "$0" | cmp - "$0"
 rc 0
 
