@@ -2532,7 +2532,6 @@ Lstat(Lrun run, Lbuf name)
   L		_ = run->ptr._;
   Format	f;
 
-  DP();
   FORMAT_INIT(f, Lbuf_writer, 0, Lbuf_push_new(_));
   Lstat_out(_, &f);
 }
