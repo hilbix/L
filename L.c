@@ -715,8 +715,8 @@ static Lnum Lnum_set_size(Lnum _, size_t len)		{ return Lnum_set_ull(_, (unsigne
 /* Lmem **************************************************************/
 /* Lmem **************************************************************/
 
-#define	LmemNx	_next02394239
-#define	LmemPr	last
+#define	LmemNx	next02394239
+#define	LmemPr	last0349504
 struct Lmem
   {
     Lmem		LmemNx, *LmemPr;
@@ -738,23 +738,23 @@ _Lmem_detach(Lmem mem)
   LFATAL(!mem);
 
   next		= mem->LmemNx;
-  last		= mem->last;
+  last		= mem->LmemPr;
   xDP(FORMAT_P(mem), FORMAT_P(last), FORMAT_P(next));
 
   if (last)
-    *last	= next;
+    *last		= next;
   if (next)
-    next->last	= last;
+    next->LmemPr	= last;
 
-  mem->LmemNx	= 0;
-  mem->last	= 0;
+  mem->LmemNx		= 0;
+  mem->LmemPr		= 0;
   return mem;
 }
 
 static Lmem
 _Lmem_detach_ptr(Lmem *ptr)
 {
-  LFATAL(!ptr || (*ptr)->last != ptr);
+  LFATAL(!ptr || (*ptr)->LmemPr != ptr);
   return _Lmem_detach(*ptr);
 }
 
@@ -779,7 +779,7 @@ Lmem_free(L _, Lmem *ptr)
   if (!mem)
     return 0;
 
-  LFATAL(ptr != mem->last);
+  LFATAL(ptr != mem->LmemPr);
   L_mem_free(_, mem);
   return 1;
 }
@@ -791,7 +791,7 @@ Lmem_new_quick(L _, size_t len)
   struct Lmem	*mem;
 
   mem		= Lalloc(_, (len+1)+sizeof *mem);	/* use fast variant	*/
-  mem->last	= 0;
+  mem->LmemPr	= 0;
   mem->LmemNx	= 0;
   mem->len	= len;
   mem->data[len]= 0;					/* +1 for Lmem_str() below	*/
@@ -804,16 +804,16 @@ Lmem_attach(Lmem mem, Lmem *ptr)
 {
   Lmem	next;
 
-  LFATAL(!ptr || !mem || mem->LmemNx || mem->last);
+  LFATAL(!ptr || !mem || mem->LmemNx || mem->LmemPr);
   xDP(FORMAT_P(mem), FORMAT_P(ptr), FORMAT_P(*ptr));
 
   next		= *ptr;
-  mem->last	= ptr;
+  mem->LmemPr	= ptr;
   mem->LmemNx	= next;
   if (next)
     {
-      LFATAL(next->last != ptr);
-      next->last	= &mem->LmemNx;
+      LFATAL(next->LmemPr != ptr);
+      next->LmemPr	= &mem->LmemNx;
     }
   *ptr		= mem;
   return mem;
@@ -826,6 +826,17 @@ Lmem_attach_to_mem(Lmem mem, Lmem parent)
   return Lmem_attach(mem, &parent->LmemNx);
 }
 
+/* adds (appends) the memory buffer to buf
+ */
+static Lmem
+Lmem_add_to_buf(Lbuf buf, Lmem mem)
+{
+  xDP(FORMAT_P(buf), FORMAT_P(mem));
+  LFATAL(mem->LmemNx || mem->LmemPr);
+  buf->last	= buf->last ? Lmem_attach_to_mem(mem, buf->last) : Lmem_attach(mem, &buf->first);
+  buf->total	+= mem->len;
+  return mem;
+}
 
 /* Get nulled buffer	*/
 static Lmem
@@ -846,7 +857,7 @@ Lmem_new(L _, size_t len)
 static Lmem
 Lmem_resize(L _, Lmem mem, size_t len)
 {
-  LFATAL(mem->LmemNx || mem->last);
+  LFATAL(mem->LmemNx || mem->LmemPr);
   if (len != mem->len)
     {
       mem		= Lrealloc(_, mem, (len+1)+sizeof *mem);
@@ -902,8 +913,8 @@ Lmem_copy(L _, Lmem src, size_t max)
 static Lmem
 Lmem_tmp(L _, Lmem mem)
 {
-  LFATAL(mem->LmemNx || mem->last);
-  mem->last	= &_->tmp;
+  LFATAL(mem->LmemNx || mem->LmemPr);
+  mem->LmemPr	= &_->tmp;
   mem->LmemNx	= _->tmp;
   _->tmp	= mem;
   return mem;
@@ -1191,17 +1202,6 @@ Lptr_push(Lptr _, Lstack *stack)
 /* Lbuf **************************************************************/
 /* Lbuf **************************************************************/
 
-/* adds (appends) the memory buffer to buf
- */
-static Lmem
-Lmem_add_to_buf(Lbuf _, Lmem mem)
-{
-  xDP(FORMAT_P(_), FORMAT_P(mem));
-  _->last	= _->last ? Lmem_attach_to_mem(mem, _->last) : Lmem_attach(mem, &_->first);
-  _->total	+= mem->len;
-  return mem;
-}
-
 /* extracts (removes) the first memory buffer from buf
  * This is only allowed on unused buffers
  */
@@ -1252,6 +1252,13 @@ Lbuf_add_ptr(Lbuf _, const void *ptr, size_t len)
 }
 
 static Lbuf
+Lbuf_add_mem(Lbuf buf, Lmem mem)
+{
+  Lmem_add_to_buf(buf, mem);
+  return buf;
+}
+
+static Lbuf
 Lbuf_add_str(Lbuf _, const void *s)
 {
   return Lbuf_add_ptr(_, s, strlen(s));
@@ -1284,26 +1291,31 @@ Lbuf_move_mem(Lbuf _, Lbuf src)
 }
 
 static Lbuf
-Lbuf_add_readn(Lbuf _, int fd, int max)
+Lbuf_add_readn(Lbuf buf, int fd, int max)
 {
-  char	buf[BUFSIZ];
+  L	_ = buf->ptr._;
   int	loops;
+  Lmem	mem;
 
-  if (max<=0 || max>=sizeof buf)
-    max	= sizeof buf;
+  LFATAL(max<=0);
   for (loops=0; loops<10000; loops++)
     {
       int got;
 
-      got	= read(fd, buf, (size_t)max);
+      mem	= Lmem_new(_, max);
+      got	= read(fd, mem->data, (size_t)max);
       if (got>0)
-        return Lbuf_add_ptr(_, buf, got);
+        {
+	  LFATAL(got > mem->len);
+          return Lbuf_add_mem(buf, Lmem_resize(_, mem, got));
+	}
+      L_mem_free(_, mem);
       if (!got)
         return 0;
       if (errno != EAGAIN)
-        Loops(_->ptr._, "read error on input", NULL);
+        Loops(_, "read error on input", NULL);
     }
-  Loops(_->ptr._, "too many loops", NULL);
+  Loops(_, "too many loops", NULL);
   return 0;
 }
 
