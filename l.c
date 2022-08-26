@@ -2576,6 +2576,9 @@ L_parse(L _, Lbuf buf)
             case ']':
               a.buf	= Lbuf_add_tmp(Lbuf_new(_), tmp, Ltmp_proc_hex);
               break;
+            case '\n':
+              /* this is a comment, just ignore	*/
+              break;
             }
           tmp->pos	= 0;
           Lrun_add(run, Lpush_arg_inc, a);
@@ -2603,6 +2606,7 @@ L_parse(L _, Lbuf buf)
             if (!isspace(c)) Loops(_, "unknown input ", FORMAT_C(c), NULL);
           case '_':
             continue;
+          case '#':	match='\n';	continue;
           case '"':	match='"';	continue;
           case '\'':	match='\'';	continue;
           case '[':	match=']';	continue;
