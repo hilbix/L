@@ -2637,6 +2637,7 @@ L_parse(L _, Lbuf buf)
               continue;
             }
           match	= 0;
+          a.i	= -1;
         }
       DP("+", FORMAT_C(c));
       if (c>='a' && c<='z')		{ f = Lpop_into_reg;	a.i = c-'a'; }
@@ -2825,7 +2826,7 @@ _L_run_dump(L _, Format *f, Lrun run, const char *prefix)
 
       step	= run->steps+i;
       FORMAT(f, prefix, ": ", FORMAT_I(i), " ", FORMAT_P(step->fn), " ", NULL);
-      if (step->arg.i == -1 || (step->arg.i>=0 && step->arg.i<=100000))	/* yuck! But it works	*/
+      if (step->arg.i == -1 || (step->arg.i>=0 && (step->arg.i<=run->cnt || step->arg.i<='Z'-'A')))	/* yuck! But it works	*/
         {
           FORMAT(f, "i: ", FORMAT_I(step->arg.i), "\n", NULL);
           continue;
@@ -2854,14 +2855,15 @@ L_run_dump(L _, Format *f)
 }
 
 
-static void
-dump(L	_)
+static L
+L_dump(L	_)
 {
   Format	f;
 
   FORMAT_INIT(f, writer, 2, _);
   L_register_dump(_, &f);
   L_run_dump(_, &f);
+  return _;
 }
 
 /* some very simple option processing
@@ -2870,9 +2872,10 @@ static L
 Largcargv(L _, int argc, char **argv)
 {
   int	i;
-  int	cflag;
+  int	cflag, dump;
 
   cflag	= 0;
+  dump	= 0;
   i	= 1;
   for (int opt=0; i<argc && argv[i][0]=='-'; )	/* programs must not start with `-`	*/
     {
@@ -2889,6 +2892,7 @@ Largcargv(L _, int argc, char **argv)
           opt=0;
           continue;
         case 'c': cflag=1; continue;
+        case 'd': dump=1; continue;
 
         case 'f':
           break;	/* options with argument fallthrough	*/
@@ -2923,6 +2927,8 @@ Largcargv(L _, int argc, char **argv)
   while (i < argc)
     Lbuf_add_str(Lbuf_push_new(_), argv[--argc]);
 
+  if (dump)
+    L_dump(_);
   return _;
 }
 
@@ -2935,12 +2941,8 @@ main(int argc, char **argv)
   DP();
 
   _		= L_init(NULL, NULL);
-
   L_register_all(_, Lfuncs);
-
   Largcargv(_, argc, argv);
-
-  dump(_);
 
   L_loop(_);
   DP(" end");
