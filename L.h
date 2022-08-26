@@ -110,7 +110,7 @@ struct L
     Lval		use, free, overuse;
     Lmem		tmp;
 
-    Lio			read, write;
+    Lio			read, write, err;
     Lio			*io;
     int			ios;
 
@@ -485,7 +485,7 @@ L_stderr(L _, ...)
   FormatArg	a;
   Format	f;
 
-  FORMAT_INIT(f, writer, 2, _);
+  FORMAT_INIT(f, writer, _ ? _->err->fd : 2, _);
   FORMAT_START(a, _);
   vFORMAT(&f, &a);
   FORMAT_END(a);
@@ -680,6 +680,10 @@ L_init(L _, void *user)
 
   _->write = io	= Lio_new(_);
   io->fd	= 1;
+  io->write	= 1;
+
+  _->err = io	= Lio_new(_);
+  io->fd	= 2;
   io->write	= 1;
 
   /* initialize registers A to Z	*/
@@ -2243,13 +2247,11 @@ Lrun_buf_from_val_dec(Lrun run, Lval v)
  * This should be nonblocking and asynchronous and left to the main loop
  */
 static void
-Lo(Lrun run, Larg a)
+Lout(Lrun run, Lio out)
 {
   L	_ = run->ptr._;
-  Lio	out;
   Lbuf	buf;
 
-  out	= _->write;
   LFATAL(!out);
   if (out->eof)
     return;
@@ -2272,6 +2274,18 @@ Lo(Lrun run, Larg a)
           break;
         }
     }
+}
+
+static void
+Lo(Lrun run, Larg a)
+{
+  Lout(run, run->ptr._->write);
+}
+
+static void
+Le(Lrun run, Larg a)
+{
+  Lout(run, run->ptr._->err);
 }
 
 static void
@@ -2700,6 +2714,7 @@ L_parse(L _, Lbuf buf)
           case ':':	f = Ldiv;	break;
           case '<':	f = Li;		break;
           case '>':	f = Lo;		break;
+          case '^':	f = Le;		break;
           case '$':	f = Lfunc;	break;
           case '=':	f = Lcmp;	break;
           case '!':	f = Lnot;	break;
