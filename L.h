@@ -455,8 +455,10 @@ vFORMAT(Format *f, FormatArg *a)
         case F_A:	vFORMAT(f, va_arg(a->l, FormatArg *)); continue;
         case F_U:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%llu", va_arg(a->l, unsigned long long));	break;
         case F_I:	s=f->buf; snprintf(f->buf, sizeof f->buf, "%lld", va_arg(a->l, long long));		break;
-        case F_c:	s=f->buf; u = va_arg(a->l, unsigned); f->buf[0]=u; f->buf[1]=0; if (isprint(u)) break;	/* fallthrough	*/
-        case F_C:	s=f->buf; u = va_arg(a->l, unsigned); snprintf(f->buf, sizeof f->buf, "%c(%02x)", isprint(u) ? u : '?', u);			break;
+        case F_c:	s=f->buf; u = va_arg(a->l, unsigned); f->buf[0]=u; f->buf[1]=0; if (isprint(u))		break;
+                else	/* fallthrough	*/
+        case F_C:	u = va_arg(a->l, unsigned);
+                s	= f->buf; snprintf(f->buf, sizeof f->buf, "%c(%02x)", isprint(u) ? u : '?', u);		break;
         case F_V:	v=va_arg(a->l, Lval); s=v ? Ltypes[v->ptr.type] : "(null)";				break;
         case F_X:
           {
