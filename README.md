@@ -149,6 +149,11 @@ And everything works with a stack.
 
 - `@` pushes the number of elements on the stack
 
+- `0` pushes number 0
+  - so `01-` gives the number `-1`
+- `1` to `9` followed by more digits push the apropriate decimal number
+  - No leading `0`s, as these pushes the number 0 before your number!
+
 - `a` to `z` pop TOS and store into variable
 - `A` to `Z` push variable onto TOS
 
@@ -176,6 +181,17 @@ And everything works with a stack.
   - `if (X) { _ }` (in C or Java) can be written like `X{_}`
   - `if (X) { _ } else { _ }` (in C or Java) can be written like `XzZ{_}Z!{_}`
     (where `z` is a helper variable to cache the conditional)
+
+- `=` compares and returns `-1` (less) `0` (equal) `1` (greater)
+  - Works analogous to `-`
+  - `2 0 =` gives 1 as `2 0 -` gives 2
+  - `2 1 =` gives 1 as `2 1 -` gives 1
+  - `2 2 =` gives 0 as `2 2 -` gives 0
+  - `2 3 =` gives -1 as `2 3 -` gives -1
+  - `2 4 =` gives -1 as `2 4 -` gives -2
+  - `AB=1+!{"a>b">}`
+  - `AB=  !{"a=b">}`
+  - `AB=1-!{"a<b">}`
 
 - `+` adds the two top elements on the stack
   - `5_3+` gives `8`

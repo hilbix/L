@@ -632,11 +632,21 @@ Lval_new(L _, enum Ltype type)
 }
 
 static Lbuf	Lbuf_new(L _)	{ return &Lval_new(_, LBUF )->buf;  }
-static Lnum	Lnum_new(L _)	{ return &Lval_new(_, LNUM )->num;  }
+static Lnum	Lnum_new(L _)	{ return &Lval_new(_, LNUM )->num;  }	/* we should get rid of this	*/
 static Lrun	Lrun_new(L _)	{ return &Lval_new(_, LRUN )->run;  }
 static Lio	Lio_new(L _)	{ return &Lval_new(_, LIO  )->io;   }
 static Llist	Llist_new(L _)	{ return &Lval_new(_, LLIST)->list; }
 static Ltmp	Ltmp_new(L _)	{ return &Lval_new(_, LTMP )->tmp;  }
+
+/* Actually, Lnum is immutable.
+ * Numbers in the range -1024 to 1024 should be statically allocated with ->overuse to protect them.
+ * Also use a cache for numbers, say last 5 numbers plus some prime hashed array of B*K buckets.
+ * The array should have use counters.
+ * Each time the array has a hit, the LRU counter increments.
+ * Each time an array has no hit and has a free slot (K), this slot is occupied.
+ * Else the LRU counter decreases round robin and if the LRU counter reaches 0 the slot is considered free (at the next round!)
+ * Such that if something sweeps up or down it does not immediately throws out all cached numbers.
+ */
 
 static Lval Lpush_dec(Lval);
 
@@ -2532,9 +2542,17 @@ Lbuf_cmp(Lbuf a, Lbuf b)
           y	= 0;
         }
     }
-  return m ? -1 : n ? 1 : 0;
+  return m ? 1 : n ? -1 : 0;
 }
 
+/* This must work analogous to -:
+ * INPUT	OP -	OP =
+ * 2 0		-2	-1
+ * 2 1		-1	-1
+ * 2 2		0	0
+ * 2 3		1	1
+ * 2 4		2	1
+ */
 static void
 Lcmp(Lrun run, Larg a)
 {
@@ -2555,8 +2573,8 @@ Lcmp(Lrun run, Larg a)
   switch (a1.ptr->type)
     {
     default:	return Lunknown(run, FORMAT_V(a1.val), " type ", FORMAT_V(a1.val), " cannot be compared (yet)", NULL);
-    case LNUM:	cmp	= Lnum_cmp(a1.num, a2.num);	break;
-    case LBUF:	cmp	= Lbuf_cmp(a1.buf, a2.buf);	break;
+    case LNUM:	cmp	= Lnum_cmp(a2.num, a1.num);	break;
+    case LBUF:	cmp	= Lbuf_cmp(a2.buf, a1.buf);	break;
     }
   Lnum_set_i(Lnum_push_new(_), cmp);
 }
@@ -3103,7 +3121,7 @@ L_parse(L _, Lbuf buf)
       DP("+", FORMAT_C(c));
       if (c>='a' && c<='z')		{ f = Lpop_into_reg;	a.i = c-'a'; }
       else if (c>='A' && c<='Z')	{ f = Lpush_reg;	a.i = c-'A'; }
-      else if (c>='0' && c<='9')
+      else if (c>='1' && c<='9')
         {
           match	= -1;
           Ltmp_add_c(tmp, c);
@@ -3120,6 +3138,12 @@ L_parse(L _, Lbuf buf)
           case '"':	match='"';	continue;
           case '\'':	match='\'';	continue;
           case '[':	match=']';	continue;
+
+	  case '0':
+	    f		= Lpush_arg_inc;
+	    a.num	= Lnum_new(_);
+	    break;
+
           case '+':	f = Ladd;	break;
           case '-':	f = Lsub;	break;
           case '.':	f = Lmul;	break;
