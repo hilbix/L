@@ -30,8 +30,21 @@ main(int argc, char **argv)
   Ldebug	= getenv("DEBUG");
   DP();
 
-  _		= L_init(NULL, NULL);
-  L_register_all(_, Lfns);
+  /* Step 1:
+   *
+   * Initialize the main L structure
+   *
+   * In future you can have
+   * - more than one such L instance
+   * - apply your own memory management
+   */
+  _		= L_init(NULL, NULL);		/* initialize environment	*/
+  L_register(_, Lfns, Lfns_, NULL);		/* register standard functions, _ functions and possibly yours	*/
+
+  /* Here:
+   * Implement loading etc. of program.
+   * We do this with our standard argc/argv processing
+   */
   Largcargv(_, argc, argv);
 
   L_loop(_);
