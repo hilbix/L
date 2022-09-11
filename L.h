@@ -676,12 +676,45 @@ static void _Lio_free (Lio  _) { }
 /* Setup *************************************************************/
 /* XXX TODO XXX this is terribly incomplete	*/
 
+enum Linit
+  {
+    Linit_NULL,
+    Linit_USER,
+#define	L_USER_PTR(X)	(void *)Linit_USER, (void *)(X)
+    Linit_END
+  };
+
 static L
-L_init(L _, void *user)
+L_vset(L _, enum Linit nr, FormatArg *a)
 {
-  int	alloc;
-  int	i;
-  Lio	io;
+  switch (nr)
+    {
+    default:		Loops(_, "unknown option: ", FORMAT_I(nr), NULL);
+    case Linit_USER:	_->user	= va_arg(a->l, void *); break;
+    }
+  return _;
+}
+
+/* set a single option	*/
+static L
+L_set(L _, enum Linit nr, ...)
+{
+  FormatArg	a;
+
+  FORMAT_START(a, nr);
+  L_vset(_, nr, &a);
+  FORMAT_END(a);
+  return _;
+}
+
+static L
+L_init(L _, ...)
+{
+  int		alloc;
+  int		i;
+  void		*s;
+  Lio		io;
+  FormatArg	l;
 
   if (!_)
     {
@@ -690,9 +723,9 @@ L_init(L _, void *user)
     }
   else
     alloc	= _->allocated;
+
   memset(_, 0, sizeof *_);
   _->allocated	= alloc;
-  _->user	= user;
 
   /* setup IO
    */
@@ -710,6 +743,13 @@ L_init(L _, void *user)
   /* initialize registers A to Z	*/
   for (i=sizeof _->stack/sizeof *_->stack; --i>0; )
     _->stack[i]	= Lstack_new(_);
+
+  /* initialize options	*/
+
+  va_start(l.l, _);
+  while ((s=va_arg(l.l, void *))!=0)
+    L_vset(_, (enum Linit)s, &l);
+  va_end(l.l);
 
   return _;
 }
@@ -2856,6 +2896,12 @@ Lstr(Lrun run, Larg a)
   Lbuf_push(Lbuf_from_val_dec(Lpop_dec(run->ptr._)));
 }
 
+static void
+L_1(Lrun run, Larg a)
+{
+  Lpop_dec(run->ptr._);		/* discard TOS	*/
+}
+
 
 static void ___here___(void) { 000; }	/* Add more Lfn here	*/
 
@@ -3011,44 +3057,6 @@ LI(Lrun run, Larg name)
 /* PARSING ***********************************************************/
 /* PARSING ***********************************************************/
 
-/*
-        _       NOP, does nothing\n"
-        0 9     push number to the stack\n"
-        A Z     push register to stack\n"
-        a z     pop TOS into register\n"
-        [xx]    push buffer to stack, xx is a sequence of hex digits\n"
-        'xx'    push string to stack as buffer\n"
-        \"x\"   push string to stack as buffer\n"
-        'x'     push string to stack as buffer\n"
-
-DONE:
-        >       pop TOS (Top Of Stack) and output it\n"
-        <       pop TOS giving the number of bytes to read from input into TOS\n"
-        =       compare: AB=: 0:A==B, -1:A<B, +1:A>B\n"
-        +       add to TOS.  5_3+ leaves 8 on stack\n"
-        -       substract from TOS.  5_3- leaves 2 on stack\n"
-        .       multiply TOS. 5_3x leaves 15 on stack\n"
-        :       multiply TOS. 5_3x leaves 15 on stack\n"
-        !       not.  empty stack, empty buffer and 0 become 1, everything else 0\n"
-        ~       invert.  Inverts all bits.  On Numbers it negates, so 1 becomes -1\n"
-TODO:
-        | & ^   or, and, xor, works for numbers and buffer\n"
-
-        $       call builtin: 1_2'hello world'$ calls builtin 'hello world'\n"
-
-        @       pop TOS and advance the given bytes (copy input to output)	=> Not needed
-
- *  We cannot use / ? % # as those have special meaning in URLs.
- *  \\ { } * ` ; are free, SPC is synonumous for + traditionally
- *  adding/substracting numbers to Buffers changes all bytes indivindually, with rollover
- *  adding/substracting buffer to numbers adds/subtracts the sum of all bytes in the buffer
- *  multiplying number with buffer repeats buffer: 'a'5* fives 'aaaaa'\n"
- *  dividing buffers: divides a buffer into two (negative: from end). 'abcde'3: gives 'abc' 'de' <-TOS\n"
- *  adding two buffer concatenates them: 'abc''de'+ gives 'abcde'\n"
- *  subtracting buffers concatenates the other way round: 'abc''de'- gives 'deabc'\n"
- *  multiplying buffers does a pattern search: 'abcde''d'. gives 4 where 'abcde''x'. gives 0\n"
- *  dividing buffers counts occurance of pattern 'abcabcde''c': gives 2 while 'abc''de': gives 0\n"
- */
 
 /* This should be vastly implemented in L itself in future .. somehow
  */
@@ -3250,9 +3258,64 @@ L_loop(L _)
   return _;
 }
 
-/* Idea: `-` is `rev` with AB- gives rev(A)rev(B)+ and not rev(A+B)
- * " hello " " world " - gives " olleh  dlrow
- */
+
+
+
+
+/*
+DONE but this should be configurable
+        _       NOP, does nothing
+
+        0 9     push number to the stack\n"
+        A Z     push register to stack\n"
+        a z     pop TOS into register\n"
+        [xx]    push buffer to stack, xx is a sequence of hex digits\n"
+        'xx'    push string to stack as buffer\n"
+        \"x\"   push string to stack as buffer\n"
+        'x'     push string to stack as buffer\n"
+
+DONE:
+        >	pop TOS (Top Of Stack) and output it\n"
+        <	pop TOS giving the number of bytes to read from input into TOS\n"
+        =	compare: AB=: 0:A==B, -1:A<B, +1:A>B\n"
+        +	add to TOS.  5_3+ leaves 8 on stack\n"
+        -	substract from TOS.  5_3- leaves 2 on stack\n"
+        .	multiply TOS. 5_3x leaves 15 on stack\n"
+        :	multiply TOS. 5_3x leaves 15 on stack\n"
+        !	not.  empty stack, empty buffer and 0 become 1, everything else 0\n"
+        ~	invert.  Inverts all bits.  On Numbers it negates, so 1 becomes -1\n"
+TODO:
+        | & ^   or, and, xor, works for numbers and buffer\n"
+
+        $       call builtin: 1_2'hello world'$ calls builtin 'hello world'\n"
+
+        @       pop TOS and advance the given bytes (copy input to output)	=> Not needed
+
+ *  We cannot use / ? % # as those have special meaning in URLs.
+ *  \\ { } * ` ; are free, SPC is synonumous for + traditionally
+ *  adding/substracting numbers to Buffers changes all bytes indivindually, with rollover
+ *  adding/substracting buffer to numbers adds/subtracts the sum of all bytes in the buffer
+ *  multiplying number with buffer repeats buffer: 'a'5* fives 'aaaaa'\n"
+ *  dividing buffers: divides a buffer into two (negative: from end). 'abcde'3: gives 'abc' 'de' <-TOS\n"
+ *  adding two buffer concatenates them: 'abc''de'+ gives 'abcde'\n"
+ *  subtracting buffers concatenates the other way round: 'abc''de'- gives 'deabc'\n"
+ *  multiplying buffers does a pattern search: 'abcde''d'. gives 4 where 'abcde''x'. gives 0\n"
+ *  dividing buffers counts occurance of pattern 'abcabcde''c': gives 2 while 'abc''de': gives 0\n"
+
+Weird ideas:
+        `-`	is `rev` with AB- gives rev(A)rev(B)+ and not rev(A+B)
+                " hello " " world " - gives " olleh  dlrow"
+*/
+
+#define	L_	NULL		/* what a hack to not implement `_`	*/
+
+static struct Lregister Lfns_[] =		/* I do not like that funtions, especially that they hog `_`	*/
+  {
+    LR1(_, 	'_',	"do nothing"),
+    LR0(_1,		"discard TOS"),		/* discard TOS	*/
+    {0}
+  };
+
 static struct Lregister Lfns[] =
   {
     LR1(add,	'+',	"pop B, pop A, push A+B. str concatenates.  FUTURE: AstrBnum adds to each byte with rollover.  AnumBstr adds up all bytes"),
@@ -3419,8 +3482,8 @@ Largcargv(L _, int argc, char **argv)
         case 'c': cflag=1; continue;
         case 'd': dump=1; continue;
 
-        case 'f':
-          break;	/* options with argument fallthrough	*/
+        /* options with argument:	*/
+        case 'f': break;
         }
       arg	= &argv[i][opt+1];
       i++;
