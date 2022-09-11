@@ -1975,7 +1975,7 @@ Lreg_find(L _, Liter name, int create)
 }
 
 static L
-L_register(L _, const char *name, Lfn fn)
+L_register_fn(L _, const char *name, Lfn fn)
 {
   Lreg		reg;
   struct Liter	iter;
@@ -1990,13 +1990,30 @@ L_register(L _, const char *name, Lfn fn)
   return _;
 }
 
+/* This currently is terribly incomplete!
+ *
+ * We want to be able to:
+ * - register functions
+ * - register parsings
+ * - deregister functions
+ *
+ * etc.
+ *
+ * Also doing this globally is good but not what we need as soon as we sandbox
+ */
 static L
-L_register_all(L _, const struct Lregister *ptr)
+L_register(L _, ...)
 {
-  for (; ptr->name; ptr++)
-    L_register(_, ptr->name, ptr->fn);
+  const struct Lregister	*ptr;
+  va_list			list;
+
+  va_start(list, _);
+  while ((ptr=va_arg(list, const struct Lregister *))!=0)
+    for (; ptr->name; ptr++)
+      L_register_fn(_, ptr->name, ptr->fn);
   return _;
 }
+
 
 /* Llist *************************************************************/
 /* Llist *************************************************************/
