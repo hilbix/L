@@ -27,7 +27,7 @@ rc 0
 L -c '(>@)' arg1 arg2
 rc 0
 
-L -c '"r"$"I"$(81921<xX>X)"stat"$^[0a]^' "$0" | cmp - "$0"
+L -c '"r"$"I"$(8192<xX>X)"stat"$^[0a]^' "$0" | cmp - "$0"
 rc 0
 
 L -c '"r"$"I"$(1<xX>X)"stat"$^[0a]^' "$0" | cmp - "$0"
