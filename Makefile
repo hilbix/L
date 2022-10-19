@@ -1,19 +1,37 @@
 # This Works is placed under the terms of the Copyright Less License,
 # see file COPYRIGHT.CLL.  USE AT OWN RISK, ABSOLUTELY NO WARRANTY.
+# Read: Free as free beer, free speech, free baby.
+# (Copyrighting babies is slavery.)
 
-# I really have no idea why following is needed
-# Also I have not the slightes idea how to fix the bugs (see below)
+# This is a generic Makefile for GCC/GNU/Linux environments which:
+# Version: 2022-10-19
+#
+# - Compiles all *.c to a bin accordingly
+# - Never needs changes as everything can be kept in the sources.
+#
+# Unluckily, this is unbearable complex to express.  And error prone.
+# And wrong.  Because options should be per-.c-file not global.
+# Also it does not work for all types of dependencies,
+# so recompilation might not be done if needed,
+# or recompilation is done too often.  Sigh.
 
+# BEGIN CONFIGURATION
 # Override this to install somewhere else
 INSTALL_PREFIX=/usr/local
-
+# Set Debug flags (real debugging usually requires -O0)
+DEBUG=-g
+# Set Optimization flags
+OPTIMIZE=-O3
+# END CONFIGURATION
 # Rest usually should not need changes
 
 SRCS=$(wildcard *.c)
 BINS=$(SRCS:.c=)
-SETS=$(shell sed -n 's/^[	 /]*\*[*	 ]*LIBS:[	 ]*//p' $(SRCS))
-CFLAGS=-Wall -O0 -g $(shell bash -xc 'pkg-config --cflags $(SETS)') $(shell sed -n 's/^[	 /]*\*[*	 ]*GCCFLAGS:[	 ]*//p' $(SRCS))
-LDLIBS=$(shell bash -xc 'pkg-config --libs $(SETS)')
+LIBS=$(shell sed -n 's/^[	 /]*\*[*	 ]*LIBS:[	 ]*//p' $(SRCS))
+GCCFLAGS=$(shell sed -n 's/^[	 /]*\*[*	 ]*GCCFLAGS:[	 ]*//p' $(SRCS))
+DEBIAN=$(shell sed -n 's/^[	 /]*\*[*	 ]*DEBIAN:[	 ]*//p' $(SRCS) | tr ' ' '\n' | sort -u)
+CFLAGS=-Wall $(OPTIMIZE) $(DEBUG) $(shell bash -xc 'pkg-config --cflags -- $(LIBS)') $(GCCFLAGS)
+LDLIBS=$(shell bash -xc 'pkg-config --libs -- $(LIBS)')
 
 TMPDIR := .tmp
 
@@ -23,14 +41,15 @@ love:	all
 .PHONY:	all
 all:	$(BINS)
 
+# Hello World: Debug extracted configuration
+.PHONY:	hw
 hw:
-	echo $(LIBS)
-	echo $(LDLIBS)
+	@/bin/bash -c 'printf "%9q=%s\\n" "$$@"' - INSTALL_PREFIX '$(INSTALL_PREFIX)' DEBUG '$(DEBUG)' OPTIMIZE '$(OPTIMIZE)' SRCS '$(SRCS)' LIBS '$(LIBS)' GCCFLAGS '$(GCCFLAGS)' LDLIBS '$(LDLIBS)' CFLAGS '$(CFLAGS)' SRCS '$(SRCS)' BINS '$(BINS)'
 
 # Do not depend on $(BINS), as this usually is run with sudo
 .PHONY:	install
 install:
-	install -s $(BINS) $(INSTALL_PREFIX)/bin
+	install -s $(BINS) $(INSTALL_PREFIX)/bin/
 
 .PHONY:	clean
 clean:
@@ -39,16 +58,19 @@ clean:
 
 .PHONY:	debian
 debian:
-	sudo apt-get install $(APT_INSTALL_FLAGS) -- `sed -n 's/^[	 /]*\*[*	 ]*DEBIAN:[	 ]*//p' *.c | tr ' ' '\n' | sort -u`
+	sudo apt-get install $(APT_INSTALL_FLAGS) -- $(DEBIAN)
 
 .PHONY:	test
 test:	all
 	./Test.sh
 
+# make debug: assumes you only have one binary (so one *.c)
 .PHONY:	debug
 debug:	all
 	DEBUG=: /usr/bin/gdb -q -nx -nw -ex r --args '$(BINS)' $(DEBUG_ARGS)
 
+# I have not the slightes idea how to fix the bugs:
+#
 # Following is quite wrong, as it recompiles all *.o,
 # not only the one for the individual target,
 # and also it re-links everything needlessly in case a single *.o changes.
@@ -57,7 +79,7 @@ debug:	all
 # My way ALWAYS looks like following:
 #
 # - each .c creates one .o and one .d (for auto-dependencies)
-# - each .o creates one bin (THIS IS THE PROBLEMATIC PART)
+# - each .o creates one bin without extension (THIS IS THE PROBLEMATIC PART)
 # - everything else is handled with includes (handled by .d)
 #
 # I really have not the slightest idea how to formulate this for the current directory,
@@ -65,7 +87,8 @@ debug:	all
 #
 #	%: $(TMPDIR)/%.o
 #
-# Note that creating the bin in .tmp/ or similar is bullshit.
+# Note that creating the bin in .tmp/ with extension .bin or similar
+# and copy it out afterwards is plain bullshit.
 
 OBJS := $(SRCS:%.c=$(TMPDIR)/%.o)
 $(BINS):	$(OBJS)
