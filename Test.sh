@@ -1,10 +1,13 @@
 #!/bin/bash
 
-set -x
+#set -x
+set -o pipefail
 
-L()
+STAT='"stat"$^[0a]^'
+
+Lc()
 {
-  timeout 10 ./L "$@"
+  timeout 10 ./L -c "$1$STAT" "${@:2}"
 }
 
 rc()
@@ -16,26 +19,28 @@ rc()
 }
 
 # Check coding for forgotten NULLs on FORMAT and Loops
-egrep -w 'FORMAT|Loops|L_stderr|L_warn|Lunknown' l.c | fgrep -v ', NULL);' | fgrep -v ', ...)'
+egrep -w 'FORMAT|Loops|L_stderr|L_warn|Lunknown' L.c | fgrep -v ', NULL);' | fgrep -v ', ...)'
 rc 1
-egrep '_format' l.c | fgrep -v ', NULL)' | fgrep -v ', ...)'
+egrep '_format' L.c | fgrep -v ', NULL)' | fgrep -v ', ...)'
 rc 1
 
 make
 rc 0
 
-L -c '(>@)' arg1 arg2
+Lc '(>@" ">)' arg1 arg2 | cmp - <(echo -n 'arg1 arg2 ')
 rc 0
 
-L -c '"r"$"I"$(8192<xX>X)"stat"$^[0a]^' "$0" | cmp - "$0"
+Lc '"r"$"I"$(8192<xX>X)' "$0" | cmp - "$0"
 rc 0
 
-L -c '"r"$"I"$(1<xX>X)"stat"$^[0a]^' "$0" | cmp - "$0"
+Lc '"r"$"I"$(1<xX>X)' "$0" | cmp - "$0"
 rc 0
 
-L -c '01->[0a]>' | cmp - <(echo -1)
+Lc '01->[0a]>' | cmp - <(echo -1)
 rc 0
 
-L -c '1a ("int"$b BA=x A> X!{"="} X1+!{">"} X1-!{"<"} >B>[0a]> @)' 0 1 2 | cmp - <(echo $'1>0\n1=1\n1<2')
+Lc '1a ("int"$b BA=x A> X!{"="} X1+!{">"} X1-!{"<"} >B>[0a]> @)' 0 1 2 | cmp - <(echo $'1>0\n1=1\n1<2')
 rc 0
+
+echo Tests OK
 
