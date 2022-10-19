@@ -5,6 +5,9 @@ set -o pipefail
 
 STAT='"stat"$^[0a]^'
 
+# MacOS: https://stackoverflow.com/a/35512328
+which timeout >/dev/null || timeout() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+
 Lc()
 {
   timeout 10 ./L -c "$1$STAT" "${@:2}"
