@@ -44,7 +44,7 @@ all:	$(BINS)
 # Hello World: Debug extracted configuration
 .PHONY:	hw
 hw:
-	@/bin/bash -c 'printf "%9q=%s\\n" "$$@"' - INSTALL_PREFIX '$(INSTALL_PREFIX)' DEBUG '$(DEBUG)' OPTIMIZE '$(OPTIMIZE)' SRCS '$(SRCS)' LIBS '$(LIBS)' GCCFLAGS '$(GCCFLAGS)' LDLIBS '$(LDLIBS)' CFLAGS '$(CFLAGS)' SRCS '$(SRCS)' BINS '$(BINS)'
+	@/bin/bash -c 'printf "%15q=%s\\n" "$$@"' - INSTALL_PREFIX '$(INSTALL_PREFIX)' DEBUG '$(DEBUG)' OPTIMIZE '$(OPTIMIZE)' SRCS '$(SRCS)' LIBS '$(LIBS)' GCCFLAGS '$(GCCFLAGS)' LDLIBS '$(LDLIBS)' CFLAGS '$(CFLAGS)' SRCS '$(SRCS)' BINS '$(BINS)'
 
 # Do not depend on $(BINS), as this usually is run with sudo
 .PHONY:	install
