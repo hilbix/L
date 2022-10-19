@@ -45,5 +45,6 @@ rc 0
 Lc '1a ("int"$b BA=x A> X!{"="} X1+!{">"} X1-!{"<"} >B>[0a]> @)' 0 1 2 | cmp - <(echo $'1>0\n1=1\n1<2')
 rc 0
 
-echo Tests OK
+echo -n 'Tests OK: ' && uname -a
+rc 0
 
