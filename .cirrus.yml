@@ -1,6 +1,6 @@
 task:
   matrix:
-    - osx_instance:
+    - macos_instance:
         image: catalina-xcode
     - container:
         image: gcc:latest
