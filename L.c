@@ -1,5 +1,6 @@
-/*
- * This is free software as in free beer, free speech and free baby.
+/* This Works is placed under the terms of the Copyright Less License,
+ * see file COPYRIGHT.CLL.  USE AT OWN RISK, ABSOLUTELY NO WARRANTY.
+ * Read: This is free software as in free beer, free speech and free baby.
  *
  * GCCFLAGS:	-Wno-unused-function
  *
